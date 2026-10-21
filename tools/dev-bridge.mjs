@@ -239,6 +239,7 @@ function run(t, resume) {
     clearTimeout(timer); clearInterval(poll);
     readTodoFile(t);
     if (current?.t !== t) return;
+    if (t.cancelled) return finish(t, false, `Annulée par ${t.cancelled}`);
     let r = st.result;
     if (!r) try { r = JSON.parse(out); } catch {} // claudeArgs perso en sortie json simple
     const ok = r && !r.is_error && code === 0;
@@ -278,6 +279,17 @@ function applyOp(m) {
   if (m.op === 'clear') tasks = tasks.filter((x) => x.state === 'pending' || x.state === 'running');
   else if (m.op === 'delete') tasks = tasks.filter((x) => x.id !== m.id || x.state === 'running');
   else if (m.op === 'reset') resetSession(`demandée par ${m.from}`);
+  else if (m.op === 'cancel') {
+    if (current?.t.id === m.id) { current.t.cancelled = m.from; current.proc.kill(); return console.log(`~ ${m.from} : annule [${m.id}]`); }
+    tasks = tasks.filter((x) => x.id !== m.id || x.state !== 'pending');
+  } else if (m.op === 'retry') {
+    const o = tasks.find((x) => x.id === m.id && (x.state === 'done' || x.state === 'failed'));
+    if (!o) return;
+    const id = randomBytes(4).toString('hex');
+    tasks.push({ id, todoFile: `.devshots/todo-${id}.json`, from: m.from, prompt: o.prompt, shot: o.shot, state: 'pending', at: Date.now() });
+    changed();
+    return pump();
+  }
   else return;
   console.log(`~ ${m.from} : ${m.op} ${m.id ?? ''}`);
   changed();

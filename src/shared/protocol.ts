@@ -45,7 +45,7 @@ export interface DevTask {
 }
 // owner : sha256 de la clé secrète du bridge. Seuls les devs qui présentent cette clé peuvent utiliser ce Claude
 export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; owner?: string; session?: DevSession }
-export type DevTaskOp = 'delete' | 'clear' | 'reset'; // reset : nouvelle conversation Claude
+export type DevTaskOp = 'delete' | 'clear' | 'reset' | 'cancel' | 'retry'; // reset : nouvelle conversation Claude · cancel : arrête la tâche en cours · retry : relance une tâche terminée
 // conversation Claude du bridge (reprise d'une tâche à l'autre) : taille du contexte / limite avant reset auto
 export interface DevSession { ctx: number; max: number; turns: number; active: boolean }
 

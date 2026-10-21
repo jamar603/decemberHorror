@@ -212,7 +212,7 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       return send(b, { t: 'todoOp', from: p.dev, task: String(m.task).slice(0, 20), op: m.op, id: m.id === undefined ? undefined : String(m.id).slice(0, 20), text: m.text === undefined ? undefined : String(m.text).slice(0, 160) });
     }
     case 'devTask': {
-      if (!p.dev || !['delete', 'clear', 'reset'].includes(m.op)) return;
+      if (!p.dev || !['delete', 'clear', 'reset', 'cancel', 'retry'].includes(m.op)) return;
       const b = bridges.get(String(m.bridge));
       if (!b) return send(ws, { t: 'devAck', ok: false, msg: 'Bridge introuvable (déconnecté ?)' });
       if (!canUse(b, p)) return send(ws, { t: 'devAck', ok: false, msg: 'Ce Claude est privé : clé du bridge manquante, accès refusé' });
