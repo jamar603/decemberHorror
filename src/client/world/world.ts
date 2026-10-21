@@ -5,11 +5,13 @@
 // sinueuse, forêt d'épicéas à perte de vue (près : épicéas détaillés branche par branche qui ondulent au vent, sous-bois,
 // rochers moussus, troncs couchés ; loin : silhouettes), montagnes enneigées en fond, ciel étoilé + lune.
 // Brouillard « de hauteur » calculé dans les shaders (épais dans les vallées, sommets qui émergent) + nappes de brume
-// qui dérivent autour du joueur. Le joueur suit le relief (update).
+// qui dérivent autour du joueur. Lieux à explorer (voiture, campement, cabane, mirador, chapelle, menhirs) : sites.ts.
+// Le joueur suit le relief et bute contre les murs (update).
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { CreateWorld } from './types';
+import { planSites, buildSites } from './sites';
 // Herbes et buissons extraits de « a forest (3) with a road at night for game » — dasy444, CC-BY 4.0 (https://sketchfab.com/dasy444)
 import kitUrl from './assets/forest-kit.glb?url';
 
@@ -115,11 +117,21 @@ export const createWorld: CreateWorld = async (ctx) => {
   const rawH = (x: number, z: number) => hills(x, z) + mountains(x, z);
   const roadH = (z: number) => { const x = roadX(z); return hills(x, z) * 0.85; };  // chaussée adoucie
   const h0 = roadH(0);   // la route au point d'apparition est à y = 0
-  const heightAt = (x: number, z: number) => {
+  const baseHeight = (x: number, z: number) => {
     let h = rawH(x, z);
     const d = Math.abs(x - roadX(z));
     if (d < 16) h += (roadH(z) - h) * smooth(16, ROAD_HALF + 1, d);   // déblai/remblai le long de la route
     return h - h0;
+  };
+  const sites = planSites(N.hash, roadX, baseHeight);   // lieux à explorer : terrain aplani autour
+  const heightAt = (x: number, z: number) => {
+    let h = baseHeight(x, z);
+    for (const s of sites) {
+      if (!s.flat) continue;
+      const d = Math.hypot(x - s.x, z - s.z);
+      if (d < s.flat + 8) h += (s.h - h) * smooth(s.flat + 8, s.flat, d);
+    }
+    return h;
   };
   const roadDist = (x: number, z: number) => Math.abs(x - roadX(z));
   const forestN = (x: number, z: number) => N.fbm(x / 120 + 1, z / 120, 3);   // densité de la forêt (= graine des épicéas)
@@ -219,7 +231,9 @@ export const createWorld: CreateWorld = async (ctx) => {
     return out;
   };
   const slopeAt = (x: number, z: number) => Math.hypot(heightAt(x + 2, z) - heightAt(x - 2, z), heightAt(x, z + 2) - heightAt(x, z - 2)) / 4;
-  const clearing = (x: number, z: number) => Math.hypot(x - roadX(0), z) < 9;   // point d'apparition dégagé
+  const S = buildSites({ hash: N.hash, heightAt, roadX, patch, keep }, sites);
+  root.add(S.group);
+  const clearing = (x: number, z: number) => Math.hypot(x - roadX(0), z) < 9 || S.blocked(x, z);   // départ, lieux, poteaux
   const instanced = (geo: THREE.BufferGeometry, mat: THREE.Material, list: Inst[], size: (t: Inst) => number, opts: { sink?: number; tint?: [number, number] } = {}) => {
     const im = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
     list.forEach((t, k) => {
@@ -319,7 +333,7 @@ export const createWorld: CreateWorld = async (ctx) => {
     return g;
   })());
   const treeline = (x: number, z: number, n: number) => heightAt(x, z) + h0 < 380 + (n - 0.5) * 150 && slopeAt(x, z) < 0.65;
-  const midTrees = scatter(6.5, SPRUCE_R - 15, 650, 1, (x, z, n) => n > 0.36 && roadDist(x, z) > ROAD_HALF + 2.5 && treeline(x, z, n));
+  const midTrees = scatter(6.5, SPRUCE_R - 15, 650, 1, (x, z, n) => n > 0.36 && roadDist(x, z) > ROAD_HALF + 2.5 && !clearing(x, z) && treeline(x, z, n));
   instanced(lodGeo, solidMat, midTrees, (t) => 12 + t.s * 14, { sink: 0.03, tint: [0.6, 1.15] });
   const farTrees = scatter(11, 640, 1700, 7, (x, z, n) => n > 0.3 && treeline(x, z, n));
   instanced(lodGeo, solidMat, farTrees, (t) => 15 + t.s * 12, { sink: 0.03, tint: [0.6, 1.1] });
@@ -343,7 +357,7 @@ export const createWorld: CreateWorld = async (ctx) => {
   const bushes = scatter(4.5, 0, 230, 3, (x, z, n) => n > 0.25 && roadDist(x, z) > ROAD_HALF + 0.8 && !clearing(x, z) && N.vnoise(x / 9, z / 9) > 0.45);
   instanced(bake(byName('treeB')!), underMat, bushes, (t) => 1.1 + t.s * 2.2, { sink: 0.08, tint: [0.3, 0.55] });
   // herbes et fougères (près du centre, très dense)
-  const grass = scatter(1.1, 0, 100, 4, (x, z) => roadDist(x, z) > ROAD_HALF - 0.3 && N.vnoise(x / 4, z / 4) > 0.3);
+  const grass = scatter(1.1, 0, 100, 4, (x, z) => roadDist(x, z) > ROAD_HALF - 0.3 && !clearing(x, z) && N.vnoise(x / 4, z / 4) > 0.3);
   instanced(bake(byName('grass')!), underMat, grass, (t) => 0.35 + t.s * 0.6, { sink: 0.05, tint: [0.45, 0.85] });
 
   // rochers moussus (géométrie procédurale bosselée)
@@ -403,7 +417,10 @@ export const createWorld: CreateWorld = async (ctx) => {
     spawn: new THREE.Vector3(sx, heightAt(sx, 0), 0),
     spawnYaw: 0,
     update(_dt, time, player) {
+      S.collide(player);                         // murs, voiture, menhirs, poteaux
       player.y = heightAt(player.x, player.z);   // le joueur suit le relief
+      S.floor(player);                           // planchers (cabane, chapelle)
+      S.update(time);
       uTime.value = time;
       const wx = time * 0.7, wz = time * 0.25;   // la brume dérive avec le vent
       for (const m of mist) {
