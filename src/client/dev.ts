@@ -6,9 +6,24 @@ import type { DevBridge, DevTask, DevTaskOp, ServerMsg } from '../shared/protoco
 import type { Net } from './net';
 
 const KEY = 'december.devToken';
+const KEYS = 'december.devKeys'; // clés des bridges dont on a le droit d'utiliser le Claude
 const DRAFT = 'december.devDraft'; // { prompt, target } — sessionStorage
 const DRAFT_IMG = 'december.devDraftImg';
 const toastBox = document.getElementById('toast')!;
+
+export function devKeys(): string[] {
+  const url = new URL(location.href);
+  const q = url.searchParams.get('key');
+  let keys: string[] = [];
+  try { keys = JSON.parse(localStorage.getItem(KEYS) || '[]'); } catch {}
+  if (q) {
+    if (!keys.includes(q)) keys.push(q);
+    try { localStorage.setItem(KEYS, JSON.stringify(keys)); } catch {}
+    url.searchParams.delete('key');
+    history.replaceState(null, '', url);
+  }
+  return keys;
+}
 
 export function devToken(): string | undefined {
   const url = new URL(location.href);
@@ -46,7 +61,7 @@ function ago(t: number) {
 export class Dev {
   enabled = false;
   bridges: DevBridge[] = [];
-  me = '';
+  owned = new Set<string>();
   private statusEl: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
   private panel: HTMLElement | null = null;
@@ -171,8 +186,8 @@ export class Dev {
     let prev = sel.value;
     if (!prev) try { prev = localStorage.getItem('december.devTarget') || ''; } catch {}
     sel.innerHTML = '';
-    const mine = this.bridges.filter((b) => b.dev === this.me || (b.allow ?? []).includes(this.me));
-    if (!mine.length) { sel.append(new Option('Aucun Claude disponible — lance `npm run bridge` sur ta machine', '')); return; }
+    const mine = this.bridges.filter((b) => !!b.owner && this.owned.has(b.owner));
+    if (!mine.length) { sel.append(new Option('Aucun Claude accessible — lance `npm run bridge` et ouvre le lien affiché', '')); return; }
     for (const b of mine) {
       const n = b.tasks.filter((t) => t.state === 'pending' || t.state === 'running').length;
       sel.append(new Option(`Claude de ${b.dev} @ ${b.host}${n ? ` · ${n} en file` : ''}`, b.id));

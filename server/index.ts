@@ -4,7 +4,7 @@
 import uWS from 'uWebSockets.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import {
   B_POS, B_SNAP, POS_BYTES, SNAP_ENTRY, TICK_HZ, MAX_PLAYERS, ROOM_MAX, CODE_LEN,
   type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo,
@@ -45,10 +45,13 @@ interface Player {
   kind: 'player';
   id: number; name: string; dev: string | null; hello: boolean; room: Room | null;
   x: number; y: number; z: number; yaw: number; dirty: boolean; lastCreate: number;
+  owned: Set<string>;
 }
-interface Bridge extends DevBridge { kind: 'bridge'; authed: boolean; allow: string[] }
-// Un Claude n'est utilisable que par son propriétaire (ou les devs qu'il autorise explicitement)
-const canUse = (b: WS, dev: string) => { const d = b.getUserData() as Bridge; return d.dev === dev || d.allow.includes(dev); };
+interface Bridge extends DevBridge { kind: 'bridge'; authed: boolean; owner: string }
+// Le token dev est partagé : l'accès à un Claude se prouve avec la clé secrète de son bridge (hash côté serveur)
+const keyId = (k: unknown) => createHash('sha256').update(String(k).slice(0, 100)).digest('hex');
+// Un Claude n'est utilisable que par les devs qui ont présenté la clé de son bridge (pas de clé = inutilisable)
+const canUse = (b: WS, p: Player) => { const o = (b.getUserData() as Bridge).owner; return !!o && p.owned.has(o); };
 type Data = Player | Bridge;
 type WS = uWS.WebSocket<Data>;
 
@@ -66,7 +69,7 @@ const toRoom = (r: Room, m: ServerMsg) => app.publish(`r:${r.code}`, JSON.string
 const broadcastAll = (m: ServerMsg) => app.publish('all', JSON.stringify(m), false);
 const bridgeList = (): DevBridge[] => [...bridges.values()].map((b) => {
   const d = b.getUserData() as Bridge;
-  return { id: d.id, dev: d.dev, host: d.host, tasks: d.tasks, allow: d.allow };
+  return { id: d.id, dev: d.dev, host: d.host, tasks: d.tasks, owner: d.owner };
 });
 // Les devs (jeu) et les bridges (sessions Claude) voient le même tableau de tâches
 function boardChanged() {
@@ -160,7 +163,8 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
     p.dev = devName(m.dev);
     ws.subscribe('all');
     if (p.dev) ws.subscribe('dev');
-    send(ws, { t: 'welcome', id: p.id, version, dev: !!p.dev, me: p.dev ?? undefined });
+    if (p.dev && Array.isArray(m.keys)) for (const k of m.keys.slice(0, 10)) p.owned.add(keyId(k));
+    send(ws, { t: 'welcome', id: p.id, version, dev: !!p.dev, owned: [...p.owned] });
     if (p.dev) send(ws, { t: 'bridges', bridges: bridgeList() });
     return;
   }
@@ -189,7 +193,7 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       if (!p.dev) return;
       const b = bridges.get(String(m.bridge));
       if (!b) return send(ws, { t: 'devAck', ok: false, msg: 'Bridge introuvable (déconnecté ?)' });
-      if (!canUse(b, p.dev)) return send(ws, { t: 'devAck', ok: false, msg: `Ce Claude appartient à ${(b.getUserData() as Bridge).dev} : accès refusé` });
+      if (!canUse(b, p)) return send(ws, { t: 'devAck', ok: false, msg: 'Ce Claude est privé : clé du bridge manquante, accès refusé' });
       const prompt = String(m.prompt || '').slice(0, 8000);
       const image = String(m.image || '');
       if (!/^data:image\/(jpeg|png|webp);base64,/.test(image) || image.length > 6_000_000)
@@ -202,7 +206,7 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       if (!p.dev || !['delete', 'clear'].includes(m.op)) return;
       const b = bridges.get(String(m.bridge));
       if (!b) return send(ws, { t: 'devAck', ok: false, msg: 'Bridge introuvable (déconnecté ?)' });
-      if (!canUse(b, p.dev)) return send(ws, { t: 'devAck', ok: false, msg: `Ce Claude appartient à ${(b.getUserData() as Bridge).dev} : accès refusé` });
+      if (!canUse(b, p)) return send(ws, { t: 'devAck', ok: false, msg: 'Ce Claude est privé : clé du bridge manquante, accès refusé' });
       return send(b, { t: 'taskOp', from: p.dev, op: m.op, id: m.id === undefined ? undefined : String(m.id) });
     }
   }
@@ -215,7 +219,7 @@ function onBridgeMsg(ws: WS, b: Bridge, raw: ArrayBuffer) {
     const dev = m.t === 'bridgeHello' ? devName(m.token) : null;
     if (!dev || m.t !== 'bridgeHello') return ws.end(4001, 'unauthorized');
     b.authed = true; b.dev = dev; b.host = String(m.host).slice(0, 40);
-    b.allow = (Array.isArray(m.allow) ? m.allow : []).slice(0, 20).map((n) => String(n).slice(0, 40)).filter((n) => n !== dev);
+    b.owner = m.key ? keyId(m.key) : '';
     bridges.set(b.id, ws);
     ws.subscribe('bridges');
     boardChanged();
@@ -252,8 +256,8 @@ const app = uWS.App()
     upgrade: (res, req, ctx) => {
       const isBridge = req.getQuery('bridge') === '1';
       const data: Data = isBridge
-        ? { kind: 'bridge', authed: false, id: randomBytes(6).toString('hex'), dev: '', host: '', tasks: [], allow: [] }
-        : { kind: 'player', id: 0, name: '', dev: null, hello: false, room: null, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0 };
+        ? { kind: 'bridge', authed: false, id: randomBytes(6).toString('hex'), dev: '', host: '', tasks: [], owner: '' }
+        : { kind: 'player', id: 0, name: '', dev: null, hello: false, room: null, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0, owned: new Set() };
       res.upgrade(data, req.getHeader('sec-websocket-key'), req.getHeader('sec-websocket-protocol'),
         req.getHeader('sec-websocket-extensions'), ctx);
     },

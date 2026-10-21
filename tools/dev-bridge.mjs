@@ -21,6 +21,9 @@ const cfgFile = join(REPO, '.dev-bridge.json');
 const cfg = existsSync(cfgFile) ? JSON.parse(readFileSync(cfgFile, 'utf8')) : {};
 const SERVER = process.env.DECEMBER_SERVER || cfg.server || 'wss://december.147-93-90-144.sslip.io/ws';
 const TOKEN = process.env.DECEMBER_DEV_TOKEN || cfg.token;
+// Clé privée de CE bridge : le token dev est commun à tous, seule cette clé donne accès à ton Claude
+let KEY = process.env.DECEMBER_BRIDGE_KEY || cfg.key;
+if (!KEY) { KEY = randomBytes(16).toString('hex'); try { writeFileSync(cfgFile, JSON.stringify({ ...cfg, key: KEY }, null, 2) + '\n'); } catch {} }
 const HOST = cfg.host || `${userInfo().username}@${hostname()}`;
 const QUEUE_FILE = join(REPO, '.dev-bridge-queue.json');
 const SHOTS = join(REPO, '.devshots');
@@ -156,8 +159,9 @@ function connect() {
   ws.on('ping', heartbeat);
   ws.on('open', () => {
     heartbeat();
-    ws.send(JSON.stringify({ t: 'bridgeHello', token: TOKEN, host: HOST, allow: Array.isArray(cfg.allow) ? cfg.allow.map(String) : [] }));
+    ws.send(JSON.stringify({ t: 'bridgeHello', token: TOKEN, host: HOST, key: KEY }));
     console.log(`Bridge connecté à ${SERVER} — repo ${REPO}`);
+    console.log(`  Ouvre une fois ce lien pour accéder à TON Claude (ne le partage pas) :\n  ${SERVER.replace(/^ws/, 'http').replace(/\/ws$/, '/')}?dev=${TOKEN}&key=${KEY}`);
     console.log(`  claude ${CLAUDE_ARGS.join(' ')}`);
     const n = tasks.filter((t) => t.state === 'pending').length;
     if (n) console.log(`  ${n} tâche(s) en file reprise(s)`);

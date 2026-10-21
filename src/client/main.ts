@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import type { RoomInfo, VersionInfo } from '../shared/protocol';
 import type { CreateWorld, World } from './world/types';
 import { Net, type Snap } from './net';
-import { Dev, devToken, toast } from './dev';
+import { Dev, devKeys, devToken, toast } from './dev';
 
 const STATE_KEY = 'december.state'; // partie + position conservées pendant un rechargement de mise à jour
 const NAME_KEY = 'december.name';
@@ -184,7 +184,7 @@ function reloadPreservingState() {
 
 function hello() {
   try { localStorage.setItem(NAME_KEY, myName()); } catch {}
-  net.send({ t: 'hello', name: myName(), dev: devToken() });
+  net.send({ t: 'hello', name: myName(), dev: devToken(), keys: devKeys() });
 }
 
 net.onOpen = () => {
@@ -196,7 +196,7 @@ net.onSnap = onSnap;
 net.onMsg = (m) => {
   dev.onMsg(m);
   switch (m.t) {
-    case 'welcome': if (m.dev) { dev.me = m.me ?? ''; dev.enable(); } onVersion(m.version); break;
+    case 'welcome': if (m.dev) { dev.owned = new Set(m.owned ?? []); dev.enable(); } onVersion(m.version); break;
     case 'version': onVersion(m.version); break;
     case 'joined': {
       const first = room?.code !== m.room.code;
