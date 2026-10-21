@@ -22,6 +22,8 @@ export interface VersionInfo {
 }
 
 /** Tâche envoyée à Claude depuis le jeu. Chaque bridge (un par dev) exécute sa file une tâche à la fois. */
+export type DevPhase = 'read' | 'edit' | 'check' | 'push';
+export interface DevStep { at: number; kind: 'read' | 'edit' | 'run' | 'check' | 'git' | 'note'; text: string }
 export interface DevTask {
   id: string;
   from: string; // dev qui a envoyé le prompt
@@ -31,6 +33,13 @@ export interface DevTask {
   at: number; // mise en file
   started?: number;
   ended?: number;
+  // suivi en direct (stream-json de Claude)
+  phase?: DevPhase;
+  activity?: string; // dernière action de Claude
+  steps?: DevStep[]; // journal horodaté (les 80 dernières actions)
+  files?: string[]; // fichiers modifiés
+  commit?: string; // dernier commit à la fin de la tâche (« abc1234 message »)
+  cost?: number; // USD
 }
 // owner : sha256 de la clé secrète du bridge. Seuls les devs qui présentent cette clé peuvent utiliser ce Claude
 export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; owner?: string; session?: DevSession }

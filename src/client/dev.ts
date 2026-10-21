@@ -9,6 +9,8 @@ const KEY = 'december.devToken';
 const KEYS = 'december.devKeys'; // clés des bridges dont on a le droit d'utiliser le Claude
 const DRAFT = 'december.devDraft'; // { prompt, target } — sessionStorage
 const DRAFT_IMG = 'december.devDraftImg';
+const PHASES: [string, string][] = [['read', 'Lecture'], ['edit', 'Modif'], ['check', 'Vérif'], ['push', 'Push']];
+const dur = (ms: number) => (ms < 60_000 ? `${Math.round(ms / 1000)} s` : `${Math.round(ms / 60_000)} min`);
 const toastBox = document.getElementById('toast')!;
 
 export function devKeys(): string[] {
@@ -62,6 +64,7 @@ export class Dev {
   enabled = false;
   bridges: DevBridge[] = [];
   owned = new Set<string>();
+  private open = new Set<string>(); // tâches dont le journal est déplié
   private statusEl: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
   private panel: HTMLElement | null = null;
@@ -218,8 +221,17 @@ export class Dev {
       const icon = t.state === 'running' ? '<i class="spin"></i>' : t.state === 'pending' ? '<span class="ic wait">…</span>'
         : t.state === 'done' ? '<span class="ic ok">✓</span>' : '<span class="ic err">✗</span>';
       const del = t.state === 'running' ? '' : `<button data-del="${esc(t.id)}" data-bridge="${esc(b.id)}" title="Retirer">✕</button>`;
-      return `<li class="task ${t.state}">${icon}<div class="body"><div class="p" title="${esc(t.prompt)}">${esc(t.prompt)}</div>
-        <div class="meta">${meta}${t.msg ? ` · <em>${esc(t.msg)}</em>` : ''}</div></div>${del}</li>`;
+      const isOpen = this.open.has(t.id);
+      const phases = t.state === 'running' ? `<div class="phases">${PHASES.map(([k, l]) => `<span class="${t.phase === k ? 'on' : PHASES.findIndex((x) => x[0] === t.phase) > PHASES.findIndex((x) => x[0] === k) ? 'past' : ''}">${l}</span>`).join('')}</div>` : '';
+      const act = t.state === 'running' && t.activity ? `<div class="act">${esc(t.activity)}</div>` : '';
+      const hasLog = !!(t.steps?.length || t.files?.length || t.commit);
+      const detail = isOpen && hasLog ? `<div class="log">
+        ${t.commit ? `<div class="commit">Commit : ${esc(t.commit)}</div>` : ''}
+        ${t.files?.length ? `<div class="files">Fichiers : ${t.files.map((f) => `<code>${esc(f)}</code>`).join(' ')}</div>` : ''}
+        ${t.cost ? `<div class="cost">Durée ${dur((t.ended ?? Date.now()) - (t.started ?? t.at))} · ${t.cost} $</div>` : ''}
+        <ol>${(t.steps ?? []).map((s) => `<li class="${s.kind}"><time>${new Date(s.at).toLocaleTimeString('fr-FR')}</time> ${esc(s.text)}</li>`).join('')}</ol></div>` : '';
+      return `<li class="task ${t.state}${hasLog ? ' has-log' : ''}" data-id="${esc(t.id)}">${icon}<div class="body"><div class="p" title="${esc(t.prompt)}">${esc(t.prompt)}</div>
+        <div class="meta">${meta}${t.msg ? ` · <em>${esc(t.msg)}</em>` : ''}${hasLog ? ` · <span class="toggle">${isOpen ? '▾ journal' : '▸ journal'}</span>` : ''}</div>${phases}${act}${detail}</div>${del}</li>`;
     };
     const order = { running: 0, pending: 1, done: 2, failed: 2 };
     const blocks = this.bridges.map((b) => {
@@ -243,6 +255,9 @@ export class Dev {
     const clear = el.closest<HTMLElement>('.clear');
     if (clear) return this.op(clear.dataset.bridge!, 'clear');
     const del = el.closest<HTMLElement>('[data-del]');
-    if (del) this.op(del.dataset.bridge!, 'delete', del.dataset.del);
+    if (del) return this.op(del.dataset.bridge!, 'delete', del.dataset.del);
+    if (el.closest('.log')) return; // sélection de texte dans le journal : ne pas replier
+    const task = el.closest<HTMLElement>('.task.has-log');
+    if (task) { const id = task.dataset.id!; if (!this.open.delete(id)) this.open.add(id); this.render(); }
   }
 }

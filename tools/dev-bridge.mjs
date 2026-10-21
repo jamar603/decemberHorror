@@ -10,9 +10,9 @@
 // - la capture est sauvée dans .devshots/ (gitignoré) et son chemin ajouté au prompt
 import WebSocket from 'ws';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { hostname, userInfo } from 'node:os';
-import { join, resolve, dirname } from 'node:path';
+import { join, resolve, dirname, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
 
@@ -84,7 +84,10 @@ let current = null; // { t, proc }
 let lastSent = '';
 let ws;
 
-const publicTasks = () => tasks.map(({ id, from, prompt, state, msg, at, started, ended }) => ({ id, from, prompt: prompt.slice(0, 600), state, msg, at, started, ended }));
+const publicTasks = () => tasks.map(({ id, from, prompt, state, msg, at, started, ended, phase, activity, steps, files, commit, cost }) => ({ id, from, prompt: prompt.slice(0, 600), state, msg, at, started, ended, phase, activity, steps, files, commit, cost }));
+// les événements Claude arrivent en rafale : on regroupe les envois
+let touchTimer;
+const touch = () => { if (!touchTimer) touchTimer = setTimeout(() => { touchTimer = null; changed(); }, 400); };
 function changed() {
   const done = tasks.filter((t) => t.state === 'done' || t.state === 'failed').sort((a, b) => (b.ended || 0) - (a.ended || 0));
   const drop = new Set(done.slice(KEEP_DONE));
@@ -99,6 +102,7 @@ function finish(t, ok, msg) {
   t.state = ok ? 'done' : 'failed';
   t.msg = String(msg || '').replace(/\s+/g, ' ').trim().slice(-300);
   t.ended = Date.now();
+  t.activity = undefined;
   current = null;
   console.log(ok ? '✓' : '✗', `[${t.id}] ${short(t.prompt)} — ${t.msg}`);
   changed();
@@ -114,16 +118,54 @@ function pump() {
   t.state = 'running';
   t.started = Date.now();
   t.msg = '';
+  t.steps = []; t.files = []; t.phase = undefined; t.activity = 'Démarrage…'; t.commit = undefined; t.cost = undefined;
   console.log(`▶ [${t.id}] ${t.from} : ${short(t.prompt)}`);
   run(t, !!session.id && !cfg.claudeArgs);
   changed();
 }
 
-// événement stream-json : on garde le résultat final et la taille réelle du contexte (usage du dernier message)
+// chemin relatif au repo (ce qui s'affiche dans le journal)
+const rel = (p) => { const s = String(p || ''); return (isAbsolute(s) ? relative(REPO, s) : s).replace(/\\/g, '/'); };
+
+// action Claude -> étape lisible du journal
+function describeTool(name, input = {}) {
+  const f = rel(input.file_path || input.notebook_path || input.path);
+  switch (name) {
+    case 'Read': return { kind: 'read', phase: 'read', text: `Lit ${f}` };
+    case 'Glob': return { kind: 'read', phase: 'read', text: `Cherche des fichiers ${input.pattern || ''}` };
+    case 'Grep': return { kind: 'read', phase: 'read', text: `Cherche « ${String(input.pattern || '').slice(0, 50)} »` };
+    case 'Edit': case 'MultiEdit': case 'NotebookEdit': return { kind: 'edit', phase: 'edit', text: `Modifie ${f}`, file: f };
+    case 'Write': return { kind: 'edit', phase: 'edit', text: `Écrit ${f}`, file: f };
+    case 'Bash': {
+      const c = String(input.command || '').replace(/\s+/g, ' ').trim();
+      if (/git\s+push/.test(c)) return { kind: 'git', phase: 'push', text: 'git push (déploiement)' };
+      if (/git\s+commit/.test(c)) return { kind: 'git', phase: 'push', text: 'git commit' };
+      if (/git\s+(pull|fetch|rebase)/.test(c)) return { kind: 'git', phase: 'push', text: `git ${c.match(/git\s+(\w+)/)[1]}` };
+      if (/typecheck|npm run build|tsc|vitest|jest|npm (run )?test/.test(c)) return { kind: 'check', phase: 'check', text: `Vérifie : ${c.slice(0, 70)}` };
+      if (/shot\.mjs|npm run dev/.test(c)) return { kind: 'check', phase: 'check', text: `Teste en local : ${c.slice(0, 70)}` };
+      return { kind: 'run', text: `Commande : ${c.slice(0, 80)}` };
+    }
+    default: return null;
+  }
+}
+
+// événement stream-json : journal d'activité, résultat final et taille réelle du contexte (usage du dernier message)
 function onEvent(t, st, ev) {
-  if (ev.type === 'assistant' && ev.message?.usage) {
+  if (ev.type === 'assistant' && ev.message) {
     const u = ev.message.usage;
-    st.ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+    if (u) st.ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+    for (const c of ev.message.content || []) {
+      let step = null;
+      if (c.type === 'tool_use') step = describeTool(c.name, c.input);
+      else if (c.type === 'text' && c.text?.trim()) step = { kind: 'note', text: c.text.replace(/\s+/g, ' ').trim().slice(0, 140) };
+      if (!step) continue;
+      (t.steps ||= []).push({ at: Date.now(), kind: step.kind, text: step.text });
+      if (t.steps.length > 80) t.steps.shift();
+      if (step.phase) t.phase = step.phase;
+      if (step.file && !(t.files ||= []).includes(step.file)) t.files.push(step.file);
+      if (step.kind !== 'note') t.activity = step.text;
+      touch();
+    }
   } else if (ev.type === 'result') st.result = ev;
 }
 
@@ -154,6 +196,8 @@ function run(t, resume) {
     const ok = r && !r.is_error && code === 0;
     if (ok) {
       if (r.session_id && !cfg.claudeArgs && !t.noSave) { session = { id: r.session_id, ctx: st.ctx || session.ctx, turns: session.turns + 1 }; saveSession(); }
+      t.cost = typeof r.total_cost_usd === 'number' ? Math.round(r.total_cost_usd * 100) / 100 : undefined;
+      if (t.files.length || t.phase === 'push') try { t.commit = execFileSync('git', ['log', '-1', '--format=%h %s'], { cwd: REPO, encoding: 'utf8' }).trim().slice(0, 200); } catch {}
       return finish(t, true, r.result || 'terminée');
     }
     // conversation reprise introuvable/corrompue : on repart de zéro, une seule fois

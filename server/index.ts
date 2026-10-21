@@ -228,7 +228,11 @@ function onBridgeMsg(ws: WS, b: Bridge, raw: ArrayBuffer) {
     return;
   }
   if (m.t === 'tasks') {
-    b.tasks = (Array.isArray(m.tasks) ? m.tasks : []).slice(0, 80).map((t) => ({ ...t, prompt: String(t.prompt ?? '').slice(0, 600), msg: String(t.msg ?? '').slice(0, 600) }));
+    b.tasks = (Array.isArray(m.tasks) ? m.tasks : []).slice(0, 80).map((t) => ({ ...t, prompt: String(t.prompt ?? '').slice(0, 600), msg: String(t.msg ?? '').slice(0, 600),
+      activity: t.activity ? String(t.activity).slice(0, 160) : undefined,
+      commit: t.commit ? String(t.commit).slice(0, 200) : undefined,
+      files: Array.isArray(t.files) ? t.files.slice(0, 40).map((f) => String(f).slice(0, 160)) : undefined,
+      steps: Array.isArray(t.steps) ? t.steps.slice(-80).map((s) => ({ at: Number(s.at) || 0, kind: s.kind, text: String(s.text ?? '').slice(0, 160) })) : undefined }));
     if (m.session && typeof m.session === 'object') {
       const s = m.session;
       b.session = { ctx: Number(s.ctx) || 0, max: Number(s.max) || 0, turns: Number(s.turns) || 0, active: !!s.active };
