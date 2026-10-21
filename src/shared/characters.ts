@@ -51,3 +51,12 @@ export function cleanLook(v: unknown): Look {
     Number.isInteger(s) && s >= 0 && s < SKIN_TONES.length ? s : DEFAULT_LOOK[1],
   ];
 }
+
+/** Salon : rôle (capacité) unique. Garde le personnage s'il est libre, sinon un libre du même genre, sinon de l'autre ; null = tous pris. */
+export function freeRole(look: Look, taken: Set<Ability>): Look | null {
+  const cur = CHARACTERS[look[0]];
+  if (!taken.has(cur.ability)) return look;
+  let i = CHARACTERS.findIndex((c) => c.gender === cur.gender && !taken.has(c.ability));
+  if (i < 0) i = CHARACTERS.findIndex((c) => !taken.has(c.ability));
+  return i < 0 ? null : [i, look[1]];
+}

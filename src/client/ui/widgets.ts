@@ -90,3 +90,42 @@ export function copyButton(label: string, text: () => string, cls = '') {
 }
 
 export function empty(text: string) { return h('p.empty', text); }
+
+/** Fenêtre de confirmation par-dessus l'écran courant (Échap / clic dehors = annuler). Résout true si confirmé. */
+let confirmSeq = 0;
+let activeConfirm: ((v: boolean) => void) | null = null;
+/** Ferme la confirmation ouverte (annulée) : le menu se ferme, la partie démarre… */
+export function dismissConfirm() { activeConfirm?.(false); }
+export function confirmDialog(o: { title: string; desc: string; yes: string; no?: string; danger?: boolean; icon?: string }): Promise<boolean> {
+  return new Promise((done) => {
+    const host = document.getElementById('menu') ?? document.body;
+    const stage = host.querySelector<HTMLElement>('.stage');
+    const prev = document.activeElement as HTMLElement | null;
+    const id = `confirm-${++confirmSeq}`;
+    const close = (v: boolean) => {
+      if (activeConfirm !== close) return;
+      activeConfirm = null;
+      removeEventListener('keydown', onKey, true);
+      if (stage) stage.inert = false;
+      wrap.inert = true; wrap.classList.add('out');
+      setTimeout(() => wrap.remove(), 220);
+      prev?.focus({ preventScroll: true });
+      done(v);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); sound.back(); close(false); }
+      else if (e.key === 'Tab' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); (document.activeElement === no ? yes : no).focus(); }
+    };
+    const no = h('button.btn.ghost', { type: 'button', 'data-sound': 'back', onclick: () => close(false) }, o.no ?? t('confirm.no'));
+    const yes = h(`button.btn${o.danger ? '.danger.solid' : '.primary'}` as 'button', { type: 'button', onclick: () => close(true) }, o.yes);
+    const wrap = h('div.confirm', { onclick: (e: MouseEvent) => { if (e.target === wrap) { sound.back(); close(false); } } },
+      h('div.dialog', { role: 'alertdialog', 'aria-modal': 'true', 'aria-labelledby': id },
+        h('div.sigil', o.icon ?? '⚠'), h('h2', { id }, o.title), h('p', o.desc), h('div.actions', no, yes)));
+    dismissConfirm();
+    activeConfirm = close;
+    if (stage) stage.inert = true;
+    host.append(wrap);
+    addEventListener('keydown', onKey, true);
+    no.focus({ preventScroll: true });
+  });
+}

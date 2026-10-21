@@ -5,6 +5,7 @@ import { t, type Key } from '../i18n';
 import { keyLabel, settings } from '../settings';
 import { trackChar } from '../profile';
 import { sheet } from '../widgets';
+import { takenRoles } from './lobby';
 import type { ScreenDef } from '../types';
 
 // Capacités déjà branchées dans le jeu (les autres attendent le contenu des prochains niveaux)
@@ -15,7 +16,8 @@ const LIVE: Partial<Record<Ability, () => string>> = {
 
 export const character: ScreenDef = (ctx) => {
   const { game } = ctx;
-  const locked = !!game.room; // le serveur n'accepte un changement de look qu'hors partie
+  // le serveur n'accepte un changement de personnage qu'hors partie ou dans un salon d'avant-partie (rôle unique)
+  const locked = !!game.room && game.room.phase !== 'lobby';
   const grid = h('div.char-grid', { role: 'radiogroup', 'aria-label': t('char.title') });
   const skins = h('div.skins', { role: 'radiogroup', 'aria-label': t('char.skin') });
   const detail = h('div.char-detail', { 'aria-live': 'polite' });
@@ -38,7 +40,14 @@ export const character: ScreenDef = (ctx) => {
 
   function paint() {
     const [ci, si] = game.look();
-    cards.forEach((b, i) => b.setAttribute('aria-checked', String(i === ci)));
+    const taken = takenRoles(ctx);
+    const allTaken = taken.size >= Object.keys(ABILITIES).length; // plus de joueurs que de rôles : doublons permis
+    cards.forEach((b, i) => {
+      b.setAttribute('aria-checked', String(i === ci));
+      const by = taken.get(CHARACTERS[i].ability);
+      b.disabled = locked || (!!by && !allTaken && i !== ci);
+      b.title = by ? t('lobby.role.taken', { name: by }) : '';
+    });
     swatches.forEach((b, i) => b.setAttribute('aria-checked', String(i === si)));
     const c = CHARACTERS[ci], ab = ABILITIES[c.ability], live = LIVE[c.ability];
     detail.replaceChildren(
@@ -64,5 +73,5 @@ export const character: ScreenDef = (ctx) => {
     h('div.skin-row', h('small', t('char.skin')), skins),
     detail,
   ], [h('span.spacer'), h('button.btn.primary.big', { type: 'button', 'data-nav': '', onclick: () => ctx.back() }, t('char.confirm'))]);
-  return { el, layout: 'split', preview: true };
+  return { el, layout: 'split', preview: true, update: (ev) => { if (ev === 'players') paint(); } };
 };

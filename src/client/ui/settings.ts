@@ -13,6 +13,7 @@ export interface Settings {
   brightness: number; // 0.6 … 1.6
   showFps: boolean;
   master: number; music: number; sfx: number; // 0 … 1
+  menuTheme: boolean; // mélodie du menu principal
   sensitivity: number; // multiplicateur 0.2 … 3
   invertY: boolean;
   binds: Record<Action, string>; // KeyboardEvent.code (touche physique : marche en AZERTY comme en QWERTY)
@@ -27,7 +28,7 @@ export interface Settings {
 const KEY = 'december.settings';
 export const DEFAULTS: Settings = {
   quality: 'high', renderScale: 1, fov: 75, brightness: 1, showFps: false,
-  master: 0.8, music: 0.7, sfx: 0.8,
+  master: 0.8, music: 0.7, sfx: 0.8, menuTheme: true,
   sensitivity: 1, invertY: false,
   binds: { forward: 'KeyW', back: 'KeyS', left: 'KeyA', right: 'KeyD', sprint: 'ShiftLeft', map: 'KeyM' },
   lang: navigator.language?.toLowerCase().startsWith('fr') !== false ? 'fr' : 'en',

@@ -49,15 +49,21 @@ export type DevTaskOp = 'delete' | 'clear' | 'reset' | 'cancel' | 'retry'; // re
 // conversation Claude du bridge (reprise d'une tâche à l'autre) : taille du contexte / limite avant reset auto
 export interface DevSession { ctx: number; max: number; turns: number; active: boolean }
 
-export interface RoomInfo { code: string; players: number; max: number; priv?: boolean }
+// phase : « lobby » = salon d'avant-partie (rôles uniques, prêt, lancement par l'hôte) ; absente = partie en cours
+export type RoomPhase = 'lobby' | 'live';
+export interface RoomInfo { code: string; players: number; max: number; priv?: boolean; phase?: RoomPhase }
+export interface LobbyState { host: number; phase: RoomPhase; ready: number[] } // ready : ids des joueurs prêts
 // Liste des parties publiques (écran « Serveurs ») : pseudos pour repérer ses amis, âge en secondes
 export interface RoomListing extends RoomInfo { names: string[]; age: number }
 
 export type ClientMsg =
   | { t: 'hello'; name: string; dev?: string; keys?: string[]; look?: Look } // look : [personnage, teinte de peau]
   // recreate : après un redémarrage serveur, le client recrée sa partie avec le même code
-  | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean; private?: boolean }
-  | { t: 'create'; private?: boolean } // private : absente de la liste des serveurs (solo, salon privé)
+  | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean; private?: boolean; lobby?: boolean }
+  | { t: 'create'; private?: boolean; lobby?: boolean } // private : absente de la liste des serveurs ; lobby : salon d'avant-partie
+  | { t: 'ready'; ready: boolean } // salon : prêt / pas prêt
+  | { t: 'role'; look: Look } // salon : changer de personnage (un rôle = une capacité, unique dans le salon)
+  | { t: 'start' } // salon : l'hôte lance la partie
   | { t: 'listRooms' }
   | { t: 'leaveRoom' }
   | { t: 'devPrompt'; bridge: string; prompt: string; image: string; fresh?: boolean }
@@ -71,6 +77,8 @@ export type ServerMsg =
   | { t: 'rooms'; rooms: RoomListing[] }
   | { t: 'join'; id: number; name: string; look?: Look }
   | { t: 'leave'; id: number }
+  | { t: 'lobby'; lobby: LobbyState } // état du salon (hôte, phase, joueurs prêts) à chaque changement
+  | { t: 'look'; id: number; look: Look } // un joueur (soi compris) a changé de personnage dans le salon
   | { t: 'version'; version: VersionInfo }
   | { t: 'devStatus'; state: 'building' | 'deploying' | 'done' | 'failed'; msg: string }
   | { t: 'bridges'; bridges: DevBridge[] }

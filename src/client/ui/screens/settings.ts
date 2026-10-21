@@ -3,13 +3,13 @@ import { h } from '../dom';
 import { LANGS, t, type Lang } from '../i18n';
 import { sound } from '../audio';
 import { ACTIONS, keyLabel, resetSettings, setSetting, settings, type Action, type Quality, type Settings } from '../settings';
-import { field, segmented, sheet, slider, tabs, toggle } from '../widgets';
+import { confirmDialog, field, segmented, sheet, slider, tabs, toggle } from '../widgets';
 import type { ScreenDef } from '../types';
 
 type Tab = 'graphics' | 'audio' | 'controls' | 'language' | 'access';
 const TAB_KEYS: Record<Tab, (keyof Settings)[]> = {
   graphics: ['quality', 'renderScale', 'fov', 'brightness', 'showFps'],
-  audio: ['master', 'music', 'sfx'],
+  audio: ['master', 'music', 'sfx', 'menuTheme'],
   controls: ['sensitivity', 'invertY', 'binds'],
   language: ['lang'],
   access: ['reduceMotion', 'highContrast', 'textScale', 'crosshair', 'grain'],
@@ -43,6 +43,7 @@ export const settingsScreen: ScreenDef = (ctx, arg) => {
       case 'audio': return h('div.pane.fields',
         ...(['master', 'music', 'sfx'] as const).map((k) => field(t(`set.${k}`), null,
           slider({ label: t(`set.${k}`), min: 0, max: 1, step: 0.05, value: settings[k], fmt: pct, onInput: (v) => setSetting(k, v) }))),
+        field(t('set.theme'), t('set.theme.sub'), toggle(settings.menuTheme, t('set.theme'), (v) => setSetting('menuTheme', v))),
         field('', null, h('button.btn', { type: 'button', 'data-nav': '', 'data-sound': 'none', onclick: () => { sound.start(); sound.stinger(); } }, `▶ ${t('set.audio.test')}`)),
       );
       case 'controls': return h('div.pane.fields',
@@ -94,7 +95,14 @@ export const settingsScreen: ScreenDef = (ctx, arg) => {
   }
 
   const foot = [
-    h('button.btn.ghost', { type: 'button', 'data-nav': '', onclick: () => { resetSettings(TAB_KEYS[tb.current]); ctx.refresh(); } }, `↺ ${t('set.reset')}`),
+    h('button.btn.ghost', {
+      type: 'button', 'data-nav': '',
+      onclick: async () => {
+        const tab = tb.current;
+        if (!(await confirmDialog({ title: t('set.reset'), desc: t('set.reset.desc', { tab: t(`set.${tab}`) }), yes: t('set.reset.yes'), icon: '↺' }))) return;
+        resetSettings(TAB_KEYS[tab]); ctx.refresh();
+      },
+    }, `↺ ${t('set.reset')}`),
     h('span.spacer'),
     h('button.btn.primary', { type: 'button', 'data-nav': '', onclick: () => ctx.back() }, t('back')),
   ];

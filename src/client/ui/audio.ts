@@ -12,9 +12,12 @@ class Sound {
   private vols = { master: 0.8, music: 0.7, sfx: 0.8 };
   private duck = 1; // ambiance baissée en partie
   private eventTimer = 0;
+  private themeGain!: GainNode; // mélodie du menu (boîte à musique désaccordée), coupée en partie
+  private themeTimer = 0;
+  private themeOn = true;
 
   constructor() {
-    onSettings((s) => { this.vols = { master: s.master, music: s.music, sfx: s.sfx }; this.applyVolumes(); });
+    onSettings((s) => { this.vols = { master: s.master, music: s.music, sfx: s.sfx }; this.themeOn = s.menuTheme; this.applyVolumes(); });
     const start = () => { this.start(); removeEventListener('pointerdown', start); removeEventListener('keydown', start); };
     addEventListener('pointerdown', start);
     addEventListener('keydown', start);
@@ -46,9 +49,12 @@ class Sound {
     const wet = ctx.createGain(); wet.gain.value = 0.5;
     this.verb.connect(wet).connect(this.music);
 
+    this.themeGain = ctx.createGain(); this.themeGain.gain.value = 0;
+    this.themeGain.connect(this.music); this.themeGain.connect(this.verb);
     this.drone();
     this.wind();
     this.scheduleEvent();
+    this.scheduleTheme(2500);
   }
 
   private applyVolumes(ramp = 0.4) {
@@ -57,6 +63,42 @@ class Sound {
     this.master.gain.setTargetAtTime(this.vols.master, t, ramp / 3 || 0.001);
     this.music.gain.setTargetAtTime(this.vols.music * this.duck, t, ramp / 3 || 0.001);
     this.sfx.gain.setTargetAtTime(this.vols.sfx, t, ramp / 3 || 0.001);
+    this.themeGain?.gain.setTargetAtTime(this.themeOn && this.duck === 1 ? 1 : 0, t, ramp / 2 || 0.3);
+  }
+
+  // Mélodie du menu : phrases lentes en ré phrygien (seconde mineure = malaise), notes de boîte à musique
+  // légèrement fausses, longues pauses. Rien n'est joué (hors timer) quand elle est coupée ou en partie.
+  private scheduleTheme(delay: number) {
+    clearTimeout(this.themeTimer);
+    this.themeTimer = window.setTimeout(() => {
+      if (this.ctx?.state === 'running' && this.themeOn && this.duck === 1) this.phrase();
+      this.scheduleTheme(9000 + Math.random() * 9000);
+    }, delay);
+  }
+  private phrase() {
+    const D = 293.66, semis = [0, 1, 3, 5, 7, 8, 10, 12]; // ré phrygien
+    const motifs = [[0, 1, 0, -2], [3, 2, 1, 0], [4, 3, 1, 1, 0], [7, 5, 4, 1], [0, 3, 2, 1, 0]];
+    const m = motifs[Math.floor(Math.random() * motifs.length)];
+    const oct = Math.random() < 0.3 ? 2 : 1;
+    let t = this.ctx!.currentTime + 0.05;
+    for (const step of m) {
+      const st = step < 0 ? semis[semis.length + step] - 12 : semis[step];
+      this.musicBox(D * oct * 2 ** (st / 12), t);
+      t += 0.75 + Math.random() * 0.5;
+    }
+    if (Math.random() < 0.5) this.musicBox(D / 2, t + 0.4, 0.05); // note grave qui résonne
+  }
+  private musicBox(freq: number, t: number, vol = 0.045) {
+    const ctx = this.ctx!, g = ctx.createGain();
+    g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(vol, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+    const pan = ctx.createStereoPanner(); pan.pan.value = Math.random() * 0.8 - 0.4;
+    g.connect(pan).connect(this.themeGain);
+    for (const [mul, v] of [[1, 1], [2.01, 0.35], [4.2, 0.08]] as const) { // partiels inharmoniques : timbre de lame métallique
+      const o = ctx.createOscillator(), og = ctx.createGain();
+      o.frequency.value = freq * mul; o.detune.value = Math.random() * 14 - 7;
+      og.gain.value = v;
+      o.connect(og).connect(g); o.start(t); o.stop(t + 3.3);
+    }
   }
 
   /** Ambiance pleine au menu, discrète en partie. */

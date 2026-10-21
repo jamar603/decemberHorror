@@ -48,7 +48,8 @@ function createTab(ctx: MenuCtx) {
       { value: 'priv', label: `◎ ${t('create.private')}` },
     ], 'pub', t('create.title'), (v) => { priv = v === 'priv'; sub.textContent = priv ? t('create.private.sub') : t('create.public.sub'); }),
     h('p.hint-line', sub),
-    h('button.btn.primary.big', { type: 'button', 'data-nav': '', onclick: () => ctx.start('lobby', () => ctx.game.create(priv)) }, t('create.go')),
+    h('ol.steps', h('li', t('create.step1')), h('li', t('create.step2')), h('li', t('create.step3'))),
+    h('button.btn.primary.big', { type: 'button', 'data-nav': '', onclick: () => ctx.start('lobby', () => ctx.game.create(priv, true)) }, t('create.go')),
   );
 }
 
@@ -117,6 +118,7 @@ function serverRow(ctx: MenuCtx, r: RoomListing, fr: Set<string>) {
     ),
     h('span.dim', timeAgo(r.age, lang)),
     h('span', hasFriend && h('em.tag', t('servers.friend')),
+      h('span.tag', { class: r.phase === 'lobby' ? 'tag phase-lobby' : 'tag' }, r.phase === 'lobby' ? t('lobby.phase.lobby') : t('servers.live')),
       h('button.btn.small', { type: 'button', 'data-nav': '', disabled: full, onclick: () => ctx.start('lobby', () => ctx.game.join(r.code)) }, full ? t('servers.full') : t('join.go'))),
   );
 }

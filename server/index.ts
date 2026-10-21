@@ -5,10 +5,10 @@ import uWS from 'uWebSockets.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
-import { cleanLook, DEFAULT_LOOK, type Look } from '../src/shared/characters';
+import { CHARACTERS, cleanLook, DEFAULT_LOOK, freeRole, type Ability, type Look } from '../src/shared/characters';
 import {
   B_POS, B_SNAP, POS_BYTES, SNAP_ENTRY, TICK_HZ, MAX_PLAYERS, ROOM_MAX, CODE_LEN,
-  type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo, type RoomListing,
+  type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo, type RoomListing, type RoomPhase,
 } from '../src/shared/protocol';
 
 const PORT = Number(process.env.PORT || 18031);
@@ -44,7 +44,7 @@ loadVersion();
 
 interface Player {
   kind: 'player';
-  id: number; name: string; look: Look; dev: string | null; hello: boolean; room: Room | null;
+  id: number; name: string; look: Look; dev: string | null; hello: boolean; room: Room | null; ready: boolean;
   x: number; y: number; z: number; yaw: number; dirty: boolean; lastCreate: number;
   owned: Set<string>;
 }
@@ -56,7 +56,8 @@ const canUse = (b: WS, p: Player) => { const o = (b.getUserData() as Bridge).own
 type Data = Player | Bridge;
 type WS = uWS.WebSocket<Data>;
 
-interface Room { code: string; members: Set<WS>; emptySince: number; priv: boolean; created: number }
+// host : id de l'hôte (premier arrivé, transmis au suivant s'il part) ; phase « lobby » jusqu'au lancement
+interface Room { code: string; members: Set<WS>; emptySince: number; priv: boolean; created: number; host: number; phase: RoomPhase }
 
 const players = new Map<number, WS>();
 const rooms = new Map<string, Room>();
@@ -78,7 +79,11 @@ function boardChanged() {
   app.publish('dev', JSON.stringify({ t: 'bridges', bridges: list } satisfies ServerMsg), false);
   app.publish('bridges', JSON.stringify({ t: 'board', bridges: list } satisfies ToBridgeMsg), false);
 }
-const roomInfo = (r: Room): RoomInfo => ({ code: r.code, players: r.members.size, max: ROOM_MAX, priv: r.priv });
+const roomInfo = (r: Room): RoomInfo => ({ code: r.code, players: r.members.size, max: ROOM_MAX, priv: r.priv, phase: r.phase });
+const membersOf = (r: Room) => [...r.members].map((w) => w.getUserData() as Player);
+const lobbyOf = (r: Room) => ({ host: r.host, phase: r.phase, ready: membersOf(r).filter((p) => p.ready).map((p) => p.id) });
+const sendLobby = (r: Room) => toRoom(r, { t: 'lobby', lobby: lobbyOf(r) });
+const takenRoles = (r: Room, except: Player) => new Set<Ability>(membersOf(r).filter((o) => o !== except).map((o) => CHARACTERS[o.look[0]].ability));
 // Parties publiques non vides, les plus peuplées d'abord
 const roomList = (): RoomListing[] => [...rooms.values()]
   .filter((r) => !r.priv && r.members.size)
@@ -94,9 +99,9 @@ function newCode() {
   }
 }
 
-function createRoom(code: string, priv = false): Room | null {
+function createRoom(code: string, priv = false, lobby = false): Room | null {
   if (rooms.size >= MAX_ROOMS) return null;
-  const r: Room = { code, members: new Set(), emptySince: Date.now(), priv, created: Date.now() };
+  const r: Room = { code, members: new Set(), emptySince: Date.now(), priv, created: Date.now(), host: 0, phase: lobby ? 'lobby' : 'live' };
   rooms.set(code, r);
   return r;
 }
@@ -107,8 +112,15 @@ function leaveRoom(ws: WS, p: Player) {
   r.members.delete(ws);
   p.room = null;
   ws.unsubscribe(`r:${r.code}`);
+  onMemberGone(r, p);
+}
+
+function onMemberGone(r: Room, p: Player) {
+  p.ready = false;
   if (!r.members.size) r.emptySince = Date.now();
   toRoom(r, { t: 'leave', id: p.id });
+  if (r.host === p.id) r.host = r.members.size ? (r.members.values().next().value!.getUserData() as Player).id : 0;
+  if (r.members.size) sendLobby(r);
 }
 
 function enterRoom(ws: WS, p: Player, r: Room, pos?: number[]) {
@@ -116,14 +128,22 @@ function enterRoom(ws: WS, p: Player, r: Room, pos?: number[]) {
   if (r.members.size >= ROOM_MAX) return send(ws, { t: 'roomError', msg: 'Partie pleine' });
   leaveRoom(ws, p);
   if (pos && pos.length === 4 && pos.every(Number.isFinite)) [p.x, p.y, p.z, p.yaw] = pos;
-  const list = [...r.members].map((w) => w.getUserData() as Player).map((o) => ({ id: o.id, name: o.name, look: o.look }));
+  if (r.phase === 'lobby') { // salon : rôle unique, attribué automatiquement si le sien est déjà pris
+    const l = freeRole(p.look, takenRoles(r, p));
+    if (l) p.look = l;
+  }
+  const list = membersOf(r).map((o) => ({ id: o.id, name: o.name, look: o.look }));
   r.members.add(ws);
   p.room = r;
+  p.ready = false;
+  if (!r.host || !list.some((o) => o.id === r.host)) r.host = p.id;
   p.dirty = true;
   ws.subscribe(`r:${r.code}`);
   send(ws, { t: 'joined', room: roomInfo(r), players: list });
   const full = snapshot(r, true); if (full) ws.send(full, true);
   toRoom(r, { t: 'join', id: p.id, name: p.name, look: p.look });
+  send(ws, { t: 'look', id: p.id, look: p.look }); // le serveur a pu changer le rôle
+  sendLobby(r);
 }
 
 function snapshot(r: Room, all: boolean): ArrayBuffer | null {
@@ -183,7 +203,7 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       const now = Date.now();
       if (now - p.lastCreate < 3000) return send(ws, { t: 'roomError', msg: 'Doucement…' });
       p.lastCreate = now;
-      const r = createRoom(newCode(), m.private === true);
+      const r = createRoom(newCode(), m.private === true, m.lobby === true);
       if (!r) return send(ws, { t: 'roomError', msg: 'Trop de parties en cours' });
       return enterRoom(ws, p, r);
     }
@@ -191,12 +211,35 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       const code = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_LEN);
       let r = rooms.get(code);
       // Serveur redémarré pendant un déploiement : la partie est recréée à l'identique
-      if (!r && m.recreate && code.length === CODE_LEN) r = createRoom(code, m.private === true) ?? undefined;
+      if (!r && m.recreate && code.length === CODE_LEN) r = createRoom(code, m.private === true, m.lobby === true) ?? undefined;
       if (!r) return send(ws, { t: 'roomError', msg: 'Code introuvable' });
       return enterRoom(ws, p, r, m.pos);
     }
     case 'leaveRoom':
       return leaveRoom(ws, p);
+    case 'ready': {
+      const r = p.room;
+      if (!r || r.phase !== 'lobby') return;
+      p.ready = m.ready === true;
+      return sendLobby(r);
+    }
+    case 'role': {
+      const r = p.room;
+      if (!r || r.phase !== 'lobby') return;
+      const want = cleanLook(m.look);
+      const free = freeRole(want, takenRoles(r, p));
+      // rôle déjà pris par un autre : refusé (sauf si tous les rôles sont pris, plus de 5 joueurs)
+      if (free && free[0] !== want[0]) return send(ws, { t: 'roomError', msg: 'Rôle déjà pris' });
+      p.look = want; p.ready = false;
+      toRoom(r, { t: 'look', id: p.id, look: p.look });
+      return sendLobby(r);
+    }
+    case 'start': {
+      const r = p.room;
+      if (!r || r.phase !== 'lobby' || r.host !== p.id) return;
+      r.phase = 'live';
+      return sendLobby(r);
+    }
     case 'listRooms':
       return send(ws, { t: 'rooms', rooms: roomList() });
     case 'devPrompt': {
@@ -283,7 +326,7 @@ const app = uWS.App()
       const isBridge = req.getQuery('bridge') === '1';
       const data: Data = isBridge
         ? { kind: 'bridge', authed: false, id: randomBytes(6).toString('hex'), dev: '', host: '', tasks: [], owner: '' }
-        : { kind: 'player', id: 0, name: '', look: [...DEFAULT_LOOK], dev: null, hello: false, room: null, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0, owned: new Set() };
+        : { kind: 'player', id: 0, name: '', look: [...DEFAULT_LOOK], dev: null, hello: false, room: null, ready: false, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0, owned: new Set() };
       res.upgrade(data, req.getHeader('sec-websocket-key'), req.getHeader('sec-websocket-protocol'),
         req.getHeader('sec-websocket-extensions'), ctx);
     },
@@ -311,8 +354,7 @@ const app = uWS.App()
       const r = d.room;
       if (r) {
         r.members.delete(ws);
-        if (!r.members.size) r.emptySince = Date.now();
-        toRoom(r, { t: 'leave', id: d.id });
+        onMemberGone(r, d);
       }
     },
   })

@@ -1,7 +1,7 @@
 // Accueil : logo, pseudo, actions principales.
 import { h, timeAgo } from '../dom';
 import { lang, t } from '../i18n';
-import { lastGame } from '../profile';
+import { ACHIEVEMENTS, isDone, lastGame, level, rank, rankName } from '../profile';
 import type { ScreenDef } from '../types';
 
 export const home: ScreenDef = (ctx) => {
@@ -19,6 +19,16 @@ export const home: ScreenDef = (ctx) => {
   const item = (action: string, label: string, sub: string, onclick: () => void, disabled = false) =>
     h('li', h('button.nav-item', { type: 'button', 'data-nav': '', 'data-action': action, disabled, onclick },
       h('span.nav-label', { 'data-text': label }, label), h('small.nav-sub', sub)));
+
+  // Carte joueur : rang, niveau, XP, succès → ouvre la progression
+  const lv = level();
+  const card = h('button.player-card', { type: 'button', 'data-nav': '', 'data-action': 'progress', onclick: () => ctx.go('profile', 'progress'), 'aria-label': t('home.progress') },
+    h('span.pc-lvl', String(lv.lvl)),
+    h('span.pc-main',
+      h('strong', rankName(rank(lv.lvl))),
+      h('span.xp-bar', h('i', { style: { width: `${(lv.cur / lv.need) * 100}%` } })),
+      h('small', `${t('prof.level', { n: lv.lvl })} · ${ACHIEVEMENTS.filter(isDone).length}/${ACHIEVEMENTS.length} ${t('home.achievements').toLowerCase()}`)),
+  );
 
   const status = h('span.net');
   const paintNet = () => { status.textContent = game.online ? t('net.online') : t('net.offline'); status.classList.toggle('on', game.online); };
@@ -43,11 +53,13 @@ export const home: ScreenDef = (ctx) => {
         () => last && ctx.start('play', () => game.join(last.code, { recreate: true, priv: last.priv })), !last),
     ),
     h('ul.nav-row',
-      ...([['character', 'home.character'], ['profile', 'home.profile'], ['settings', 'home.settings'], ['credits', 'home.credits']] as const)
-        .map(([id, k]) => h('li', h('button.link', { type: 'button', 'data-nav': '', 'data-action': id, onclick: () => ctx.go(id) }, t(k)))),
+      ...([['character', 'home.character', undefined], ['profile', 'home.profile', undefined], ['profile', 'home.achievements', 'achievements'],
+        ['settings', 'home.settings', undefined], ['credits', 'home.credits', undefined]] as const)
+        .map(([id, k, a]) => h('li', h('button.link', { type: 'button', 'data-nav': '', 'data-action': a ?? id, onclick: () => ctx.go(id, a) }, t(k)))),
       h('li', h('button.link.danger', { type: 'button', 'data-nav': '', 'data-action': 'quit', onclick: () => ctx.go('quit') }, t('home.quit'))),
     ),
     h('footer.home-foot', status, h('span.hint', t('hint.nav'))),
+    card, // en dernier dans le DOM (focus initial sur « Jouer »), affichée en haut à droite
   );
   return { el, layout: 'home', update: (ev) => { if (ev === 'net') paintNet(); } };
 };

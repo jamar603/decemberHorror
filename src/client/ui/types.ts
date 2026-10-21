@@ -3,7 +3,7 @@
 import type { RoomInfo, RoomListing } from '../../shared/protocol';
 import type { Look } from '../../shared/characters';
 
-export interface PlayerView { id: number; name: string; look: Look; me?: boolean }
+export interface PlayerView { id: number; name: string; look: Look; me?: boolean; host?: boolean; ready?: boolean }
 
 export interface GameApi {
   readonly room: RoomInfo | null;
@@ -13,12 +13,19 @@ export interface GameApi {
   setName(n: string): void;
   look(): Look;
   setLook(l: Look): void;
-  create(priv: boolean): void;
+  create(priv: boolean, lobby?: boolean): void; // lobby : salon d'avant-partie (rôles, prêt, lancement par l'hôte)
   join(code: string, opts?: { recreate?: boolean; priv?: boolean }): void;
   play(): void; // fermer le menu et capturer la souris
   leave(): void;
   listRooms(): void;
   link(code?: string): string;
+  // --- Salon d'avant-partie (room.phase === 'lobby')
+  readonly isHost: boolean;
+  setReady(on: boolean): void;
+  start(): void; // hôte uniquement : le serveur fait entrer tout le salon dans le monde
+  /** Invitation directe d'un ami (notification en jeu). Nécessite des comptes joueurs côté serveur : absent pour l'instant,
+   *  le menu retombe alors sur le partage du lien d'invitation. */
+  inviteFriend?(name: string, code: string): void;
 }
 
 export type ScreenId = 'home' | 'multi' | 'lobby' | 'character' | 'settings' | 'profile' | 'credits' | 'quit' | 'bye';

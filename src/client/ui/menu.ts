@@ -9,6 +9,7 @@ import { t } from './i18n';
 import { sound } from './audio';
 import { onSettings, settings } from './settings';
 import { achName, onAchievement } from './profile';
+import { dismissConfirm } from './widgets';
 import type { GameApi, GameEvent, Intent, MenuCtx, ScreenDef, ScreenId, ScreenView } from './types';
 import { home } from './screens/home';
 import { multi } from './screens/multi';
@@ -116,6 +117,7 @@ export class Menu {
     this.reset(id, arg);
   }
   close() {
+    dismissConfirm();
     this.view?.dispose?.(); this.view = null;
     this.root.classList.add('closing');
     sound.setInGame(true);
@@ -127,10 +129,16 @@ export class Menu {
     const intent = this.intent;
     this.intent = null; this.ctx.busy = false; this.root.classList.remove('busy');
     clearTimeout(this.quick); this.quick = 0;
-    if (intent === 'lobby') { sound.success(); this.reset('lobby'); }
+    // salon d'avant-partie : on attend le lancement par l'hôte, quel que soit le chemin d'arrivée
+    if (intent === 'lobby' || this.game.room?.phase === 'lobby') { sound.success(); this.reset('lobby'); }
     else if (intent === 'play' || this.visible) { sound.stinger(); this.game.play(); }
   }
   onLeft() { this.open('home'); }
+  /** L'hôte a lancé la partie : fondu au noir puis entrée dans le monde. */
+  onStarted() {
+    sound.stinger();
+    this.game.play();
+  }
   onRoomError(msg: string) {
     this.intent = null; this.ctx.busy = false; this.root.classList.remove('busy');
     if (!this.visible) this.open();

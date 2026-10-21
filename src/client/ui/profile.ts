@@ -115,6 +115,19 @@ export function setFriend(name: string, on: boolean) {
   write(K.people, people);
 }
 
+// --- Rangs : titres débloqués avec le niveau (affichés dans le profil et sur l'accueil)
+export const RANKS: { lvl: number; name: Record<'fr' | 'en', string> }[] = [
+  { lvl: 1, name: { fr: 'Égaré', en: 'Stray' } },
+  { lvl: 3, name: { fr: 'Rôdeur', en: 'Prowler' } },
+  { lvl: 5, name: { fr: 'Survivant', en: 'Survivor' } },
+  { lvl: 8, name: { fr: 'Traqueur', en: 'Tracker' } },
+  { lvl: 12, name: { fr: 'Veilleur', en: 'Watcher' } },
+  { lvl: 16, name: { fr: 'Spectre', en: 'Wraith' } },
+  { lvl: 20, name: { fr: 'Légende de la forêt', en: 'Legend of the woods' } },
+];
+export const rankName = (r: (typeof RANKS)[number]) => r.name[lang] ?? r.name.fr;
+export function rank(lvl = level().lvl) { return [...RANKS].reverse().find((r) => lvl >= r.lvl)!; }
+
 // --- Dernière partie (bouton « Continuer »)
 export function lastGame(): LastGame | null {
   try { const g = JSON.parse(localStorage.getItem(K.last) || 'null'); return g?.code ? g : null; } catch { return null; }

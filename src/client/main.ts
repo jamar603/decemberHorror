@@ -1,7 +1,7 @@
 // Shell du jeu : rendu, contrôles, réseau, menu. Stable entre les versions.
 // Le niveau (world.ts) est un module séparé, remplacé à chaud quand une nouvelle version sort.
 import * as THREE from 'three';
-import type { RoomInfo, VersionInfo } from '../shared/protocol';
+import type { LobbyState, RoomInfo, VersionInfo } from '../shared/protocol';
 import type { CreateWorld, World } from './world/types';
 import { Net, type Snap } from './net';
 import { Dev, devKeys, devToken, toast } from './dev';
@@ -142,6 +142,14 @@ function removeRemote(id: number) {
   remotes.delete(id);
   menu.emit('players');
 }
+function setRemoteLook(id: number, l: Look) {
+  const r = remotes.get(id);
+  if (!r) return;
+  const { buf, group } = r, vis = group.visible, pos = group.position.clone(), yaw = group.rotation.y;
+  removeRemote(id); addRemote(id, r.name, l);
+  const n = remotes.get(id)!;
+  n.buf = buf; n.group.visible = vis; n.group.position.copy(pos); n.group.rotation.y = yaw;
+}
 function clearRemotes() { for (const id of [...remotes.keys()]) removeRemote(id); }
 function onSnap(list: Snap[]) {
   const t = performance.now();
@@ -179,6 +187,7 @@ const dev = new Dev(net, captureFrame, (open) => {
 });
 let shellPending = false;
 let room: RoomInfo | null = null;
+let lobby: LobbyState | null = null; // salon d'avant-partie (hôte, phase, joueurs prêts)
 let restorePos: [number, number, number, number] | null = null;
 
 const seedOf = (code: string) => { let h = 2166136261; for (const c of code) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
@@ -209,7 +218,7 @@ function hello() {
 net.onOpen = () => {
   hello();
   // reconnexion (redémarrage serveur au déploiement) : on revient dans la même partie, au même endroit
-  if (room) net.send({ t: 'join', code: room.code, pos: [me.pos.x, me.pos.y, me.pos.z, me.yaw], recreate: true, private: room.priv });
+  if (room) net.send({ t: 'join', code: room.code, pos: [me.pos.x, me.pos.y, me.pos.z, me.yaw], recreate: true, private: room.priv, lobby: room.phase === 'lobby' });
   menu.emit('net');
 };
 net.onSnap = onSnap;
@@ -220,6 +229,7 @@ net.onMsg = (m) => {
     case 'version': onVersion(m.version); break;
     case 'joined': {
       const first = room?.code !== m.room.code;
+      if (first) lobby = null;
       room = m.room;
       seed = seedOf(room.code);
       clearRemotes();
@@ -236,6 +246,18 @@ net.onMsg = (m) => {
     case 'rooms': menu.onRooms(m.rooms); break;
     case 'join': addRemote(m.id, m.name, m.look); break;
     case 'leave': removeRemote(m.id); break;
+    case 'look':
+      if (m.id === net.id) applyLook(m.look); else setRemoteLook(m.id, m.look);
+      menu.emit('players');
+      break;
+    case 'lobby': {
+      const started = room?.phase === 'lobby' && m.lobby.phase === 'live';
+      lobby = m.lobby;
+      if (room) room.phase = m.lobby.phase;
+      menu.emit('players');
+      if (started) menu.onStarted(); // l'hôte a lancé la partie : tout le salon entre dans le monde
+      break;
+    }
   }
 };
 
@@ -249,7 +271,10 @@ const api: GameApi = {
   players: () => [
     { id: net.id, name: myName(), look, me: true },
     ...[...remotes.entries()].map(([id, r]) => ({ id, name: r.name, look: r.look })),
-  ],
+  ].map((p) => ({ ...p, host: lobby?.host === p.id, ready: !!lobby?.ready.includes(p.id) })),
+  get isHost() { return !!room && lobby?.host === net.id; },
+  setReady(on) { net.send({ t: 'ready', ready: on }); },
+  start() { net.send({ t: 'start' }); },
   name: myName,
   setName(n) {
     playerName = n.slice(0, 16);
@@ -259,13 +284,14 @@ const api: GameApi = {
   },
   look: () => look,
   setLook,
-  create(priv) { creating = true; hello(); net.send({ t: 'create', private: priv }); },
+  create(priv, inLobby) { creating = true; hello(); net.send({ t: 'create', private: priv, lobby: inLobby }); },
   join(code, o) { hello(); net.send({ t: 'join', code: code.trim().toUpperCase(), recreate: o?.recreate, private: o?.priv }); },
   play() { menu.close(); lock(); },
   leave() {
     if (room) setLastGame({ code: room.code, at: Date.now(), priv: !!room.priv });
     net.send({ t: 'leaveRoom' });
     room = null;
+    lobby = null;
     mapOpen = false;
     clearRemotes();
     history.replaceState(null, '', '/');
@@ -310,10 +336,15 @@ function refreshPreview() {
   scene.add(preview.group);
 }
 function setLook(l: Look) {
+  // salon d'avant-partie : le serveur valide (rôle unique) puis renvoie « look » à tout le salon
+  if (room?.phase === 'lobby') return net.send({ t: 'role', look: cleanLook(l) });
+  applyLook(l);
+  if (!room) hello(); // re-hello hors partie : le serveur met à jour le look
+}
+function applyLook(l: Look) {
   look = cleanLook(l);
   try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch {}
   refreshPreview();
-  if (!room) hello(); // re-hello hors partie : le serveur met à jour le look
 }
 const previewDir = new THREE.Vector3();
 // lumière d'aperçu toujours dans la scène (intensité 0 hors écran Personnage : pas de recompilation des shaders)
@@ -432,7 +463,7 @@ renderer.setAnimationLoop(() => {
     restorePos = restored.pos;
     me.pos.set(restorePos[0], restorePos[1], restorePos[2]);
     me.yaw = restorePos[3]; me.pitch = restored.pitch;
-    menu.root.hidden = true;
+    if (room.phase === 'lobby') menu.open('lobby'); else menu.root.hidden = true;
   } else menu.open('home');
 
   if (import.meta.env.DEV) {
