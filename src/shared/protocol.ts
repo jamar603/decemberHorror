@@ -30,7 +30,8 @@ export interface DevTask {
   started?: number;
   ended?: number;
 }
-export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[] }
+// allow : autres devs autorisés à utiliser ce Claude (par défaut aucun : seul le propriétaire du token)
+export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; allow?: string[] }
 export type DevTaskOp = 'delete' | 'clear';
 
 export interface RoomInfo { code: string; players: number; max: number }
@@ -45,7 +46,7 @@ export type ClientMsg =
   | { t: 'devTask'; bridge: string; op: DevTaskOp; id?: string };
 
 export type ServerMsg =
-  | { t: 'welcome'; id: number; version: VersionInfo | null; dev: boolean }
+  | { t: 'welcome'; id: number; version: VersionInfo | null; dev: boolean; me?: string }
   | { t: 'joined'; room: RoomInfo; players: { id: number; name: string }[] }
   | { t: 'roomError'; msg: string }
   | { t: 'join'; id: number; name: string }
@@ -57,7 +58,7 @@ export type ServerMsg =
 
 // Messages bridge <-> serveur
 export type BridgeMsg =
-  | { t: 'bridgeHello'; token: string; host: string }
+  | { t: 'bridgeHello'; token: string; host: string; allow?: string[] }
   | { t: 'delivered'; reqId: string; ok: boolean; msg: string }
   | { t: 'tasks'; tasks: DevTask[] };
 export type ToBridgeMsg =

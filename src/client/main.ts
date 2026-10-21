@@ -196,7 +196,7 @@ net.onSnap = onSnap;
 net.onMsg = (m) => {
   dev.onMsg(m);
   switch (m.t) {
-    case 'welcome': if (m.dev) dev.enable(); onVersion(m.version); break;
+    case 'welcome': if (m.dev) { dev.me = m.me ?? ''; dev.enable(); } onVersion(m.version); break;
     case 'version': onVersion(m.version); break;
     case 'joined': {
       const first = room?.code !== m.room.code;

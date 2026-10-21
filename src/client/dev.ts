@@ -46,6 +46,7 @@ function ago(t: number) {
 export class Dev {
   enabled = false;
   bridges: DevBridge[] = [];
+  me = '';
   private statusEl: HTMLElement | null = null;
   private modal: HTMLElement | null = null;
   private panel: HTMLElement | null = null;
@@ -170,8 +171,9 @@ export class Dev {
     let prev = sel.value;
     if (!prev) try { prev = localStorage.getItem('december.devTarget') || ''; } catch {}
     sel.innerHTML = '';
-    if (!this.bridges.length) { sel.append(new Option('Aucun bridge connecté — lance `npm run bridge` sur ta machine', '')); return; }
-    for (const b of this.bridges) {
+    const mine = this.bridges.filter((b) => b.dev === this.me || (b.allow ?? []).includes(this.me));
+    if (!mine.length) { sel.append(new Option('Aucun Claude disponible — lance `npm run bridge` sur ta machine', '')); return; }
+    for (const b of mine) {
       const n = b.tasks.filter((t) => t.state === 'pending' || t.state === 'running').length;
       sel.append(new Option(`Claude de ${b.dev} @ ${b.host}${n ? ` · ${n} en file` : ''}`, b.id));
     }

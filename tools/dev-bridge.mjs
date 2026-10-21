@@ -156,7 +156,7 @@ function connect() {
   ws.on('ping', heartbeat);
   ws.on('open', () => {
     heartbeat();
-    ws.send(JSON.stringify({ t: 'bridgeHello', token: TOKEN, host: HOST }));
+    ws.send(JSON.stringify({ t: 'bridgeHello', token: TOKEN, host: HOST, allow: Array.isArray(cfg.allow) ? cfg.allow.map(String) : [] }));
     console.log(`Bridge connecté à ${SERVER} — repo ${REPO}`);
     console.log(`  claude ${CLAUDE_ARGS.join(' ')}`);
     const n = tasks.filter((t) => t.state === 'pending').length;
