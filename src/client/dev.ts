@@ -255,7 +255,7 @@ export class Dev {
     const order = { running: 0, pending: 1, done: 2, failed: 2 };
     const blocks = this.bridges.map((b) => {
       const ts = [...b.tasks].sort((x, y) => order[x.state] - order[y.state] || (order[x.state] === 2 ? (y.ended ?? 0) - (x.ended ?? 0) : 0));
-      const se = b.session;
+      const se = this.owned.has(b.owner ?? '') ? b.session : undefined; // conversation privée : visible seulement par son propriétaire
       const conv = se ? `<div class="conv">Conversation : ${se.active ? `${Math.round(se.ctx / 1000)}k / ${Math.round(se.max / 1000)}k tokens · ${se.turns} tâche${se.turns > 1 ? 's' : ''}` : 'vide (la prochaine tâche repart de zéro)'}${se.active && this.owned.has(b.owner ?? '') ? ` <button class="reset" data-bridge="${esc(b.id)}">Nouvelle conversation</button>` : ''}</div>` : '';
       const clear = ts.some((t) => order[t.state] === 2) ? `<button class="clear" data-bridge="${esc(b.id)}">Vider terminées</button>` : '';
       return `<h3>${esc(b.dev)} <small>@ ${esc(b.host)}</small>${clear}</h3>${conv}
