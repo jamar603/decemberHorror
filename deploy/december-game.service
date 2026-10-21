@@ -1,0 +1,29 @@
+[Unit]
+Description=December - serveur temps réel (uWebSockets.js)
+After=network.target
+
+[Service]
+Type=simple
+User=december
+Group=december
+WorkingDirectory=/opt/december/app
+EnvironmentFile=/etc/december-game.env
+ExecStart=/opt/december/node/bin/node --max-old-space-size=160 /opt/december/app/index.js
+Restart=always
+RestartSec=1
+# Budget ressources : le VPS héberge d'autres services
+MemoryMax=256M
+CPUQuota=60%
+Nice=5
+TasksMax=64
+# Durcissement
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadOnlyPaths=/opt/december
+
+[Install]
+WantedBy=multi-user.target

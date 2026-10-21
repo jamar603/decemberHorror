@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>December</title>
+    <link rel="stylesheet" href="/src/client/style.css" />
+  </head>
+  <body>
+    <canvas id="game"></canvas>
+    <div id="crosshair"></div>
+    <div id="hud"></div>
+    <div id="room-bar" hidden>
+      <span>Clique pour jouer · ZQSD/WASD · Maj courir · Échap souris</span>
+      <button id="copy">Copier le lien</button>
+      <button id="quit">Quitter</button>
+    </div>
+    <div id="menu">
+      <div class="panel">
+        <h1>December</h1>
+        <label>Pseudo <input id="name" maxlength="16" placeholder="Ton pseudo" autocomplete="off" /></label>
+        <button id="create" class="primary">Créer une partie</button>
+        <div class="row">
+          <input id="code" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false" />
+          <button id="join">Rejoindre</button>
+        </div>
+        <p id="menu-error" role="alert"></p>
+      </div>
+    </div>
+    <div id="toast"></div>
+    <script type="module" src="/src/client/main.ts"></script>
+  </body>
+</html>

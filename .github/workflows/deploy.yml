@@ -1,0 +1,71 @@
+name: Deploy december
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Un seul déploiement à la fois, les suivants attendent (pas d'annulation : chaque push dev doit passer)
+concurrency:
+  group: december
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      URL: https://december.147-93-90-144.sslip.io
+      DEPLOY_TOKEN: ${{ secrets.DEPLOY_TOKEN }}
+      MSG: ${{ github.event.head_commit.message }}
+    steps:
+      - name: Notifier les devs (build)
+        run: |
+          body=$(jq -nc --arg m "$(printf '%s' "$MSG" | head -1)" '{state:"building",msg:$m}')
+          curl -fsS -m 5 -X POST "$URL/api/deploy" -H "x-deploy-token: $DEPLOY_TOKEN" -d "$body" || true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: |
+          git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+          npm ci --no-audit --no-fund
+
+      - name: Typecheck + build
+        run: npm run typecheck && npm run build
+
+      - name: Package
+        run: |
+          mkdir -p out/server/node_modules/uWebSockets.js out/dist
+          cp -r dist/. out/dist/
+          cp dist-server/index.js out/server/index.js
+          echo '{"type":"module"}' > out/server/package.json
+          U=node_modules/uWebSockets.js
+          cp $U/package.json $U/uws.js $U/ESM_wrapper.mjs $U/uws_linux_x64_*.node out/server/node_modules/uWebSockets.js/
+          cp deploy/remote-deploy.sh out/
+
+      - name: Notifier les devs (déploiement)
+        run: |
+          curl -fsS -m 5 -X POST "$URL/api/deploy" -H "x-deploy-token: $DEPLOY_TOKEN" -d '{"state":"deploying"}' || true
+
+      - name: Upload + bascule
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          rsync -az --delete out/ "december@$HOST:/opt/december/incoming/"
+          ssh "december@$HOST" "bash /opt/december/incoming/remote-deploy.sh $GITHUB_SHA"
+
+      - name: Notifier l'échec
+        if: failure()
+        run: |
+          curl -fsS -m 5 -X POST "$URL/api/deploy" -H "x-deploy-token: $DEPLOY_TOKEN" -d '{"state":"failed","msg":"voir GitHub Actions"}' || true
