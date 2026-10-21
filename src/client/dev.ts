@@ -211,7 +211,7 @@ export class Dev {
     const pt = (e: PointerEvent): [number, number] => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) * (cv.width / r.width), (e.clientY - r.top) * (cv.height / r.height)]; };
     cv.addEventListener('pointerdown', (e) => { drawing = true; cv.setPointerCapture(e.pointerId); strokes.push([pt(e)]); redraw(); });
     cv.addEventListener('pointermove', (e) => { if (!drawing) return; strokes[strokes.length - 1].push(pt(e)); redraw(); });
-    const stop = () => { drawing = false; };
+    const stop = () => { drawing = false; ta.focus(); };
     cv.addEventListener('pointerup', stop); cv.addEventListener('pointercancel', stop);
     m.querySelector('.undo')!.addEventListener('click', () => { strokes.pop(); redraw(); });
     m.querySelector('.wipe')!.addEventListener('click', () => { strokes.length = 0; redraw(); });
