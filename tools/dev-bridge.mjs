@@ -288,9 +288,9 @@ function writeBoard(bridges) {
   const fmt = (t) => new Date(t).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
   const lines = ['# Tableau des tâches (tous les devs) — mis à jour en direct par le bridge', ''];
   for (const s of [['running', 'En cours'], ['pending', 'En attente'], ['done', 'Terminées récemment'], ['failed', 'Échouées récemment']]) {
-    const list = bridges.flatMap((b) => b.tasks.filter((t) => t.state === s[0]).map((t) => ({ ...t, dev: b.dev })))
+    const list = bridges.flatMap((b) => b.tasks.filter((t) => t.state === s[0]).map((t) => ({ ...t, dev: b.dev, host: b.host })))
       .sort((a, b) => (b.ended || b.started || b.at) - (a.ended || a.started || a.at)).slice(0, 15);
-    lines.push(`## ${s[1]}`, ...(list.length ? list.map((t) => `- [${t.dev}] ${fmt(t.ended || t.started || t.at)} — ${t.prompt.replace(/\s+/g, ' ').slice(0, 200)}${t.msg ? `\n  → ${t.msg}` : ''}`) : ['- (rien)']), '');
+    lines.push(`## ${s[1]}`, ...(list.length ? list.map((t) => `- [${t.host}] ${fmt(t.ended || t.started || t.at)} — ${t.prompt.replace(/\s+/g, ' ').slice(0, 200)}${t.activity ? `\n  ▶ ${t.activity}` : ''}${t.files?.length ? `\n  fichiers touchés : ${t.files.join(', ')}` : ''}${t.msg ? `\n  → ${t.msg}` : ''}`) : ['- (rien)']), '');
   }
   try { mkdirSync(SHOTS, { recursive: true }); writeFileSync(BOARD, lines.join('\n')); } catch {}
 }

@@ -261,8 +261,28 @@ export class Dev {
       return `<h3>${esc(b.dev)} <small>@ ${esc(b.host)}</small>${clear}</h3>${conv}
         ${ts.length ? `<ul>${ts.map((t) => row(b, t)).join('')}</ul>` : '<p class="empty">Aucune tâche · F9 pour en ajouter une</p>'}`;
     }).join('');
+    // vue d'équipe : qui fait quoi en ce moment (le token dev est partagé, la machine identifie la personne)
+    const who = (b: DevBridge) => esc(b.host.split('@')[0]);
+    const cards = this.bridges.map((b) => {
+      const cur = b.tasks.find((t) => t.state === 'running');
+      const q = b.tasks.filter((t) => t.state === 'pending').length;
+      const td = cur?.todos ?? [];
+      const prog = td.length ? ` · ${td.filter((x) => x.status === 'done').length}/${td.length}` : '';
+      return `<li class="card ${cur ? 'busy' : ''}" title="${esc(b.host)}"><span class="dot"></span><div class="body">
+        <div class="who"><b>${who(b)}</b>${q ? `<small>${q} en file</small>` : ''}</div>
+        ${cur ? `<div class="p">${esc(cur.prompt)}</div><div class="act">${esc(cur.activity || 'Démarrage…')}${prog}</div>` : '<div class="idle">Inactif</div>'}</div></li>`;
+    }).join('');
+    const touched = new Map<string, Set<string>>();
+    for (const b of this.bridges) for (const t of b.tasks) if (t.state === 'running') for (const f of t.files ?? []) (touched.get(f) ?? touched.set(f, new Set()).get(f)!).add(b.host.split('@')[0]);
+    const clash = [...touched].filter(([, s]) => s.size > 1).map(([f, s]) => `<div class="warn">⚠ <code>${esc(f)}</code> modifié en même temps par ${[...s].map(esc).join(' et ')}</div>`).join('');
+    const feed = this.bridges.flatMap((b) => b.tasks.flatMap((t) => [
+      ...(t.steps ?? []).filter((s) => s.kind !== 'note').map((s) => ({ at: s.at, who: who(b), text: s.text })),
+      ...(t.ended ? [{ at: t.ended, who: who(b), text: `${t.state === 'done' ? '✓ terminé' : '✗ échoué'} : ${t.prompt.replace(/\s+/g, ' ').slice(0, 50)}` }] : []),
+    ])).sort((x, y) => y.at - x.at).slice(0, 8)
+      .map((e) => `<li><time>${new Date(e.at).toLocaleTimeString('fr-FR')}</time> <b>${e.who}</b> ${esc(e.text)}</li>`).join('');
+    const team = this.bridges.length ? `<section class="team"><h3>Équipe</h3><ul class="cards">${cards}</ul>${clash}${feed ? `<ul class="feed">${feed}</ul>` : ''}</section>` : '';
     p.innerHTML = `<header><b>Tâches Claude (tous les devs)</b><button class="x" title="Fermer (F10)">✕</button></header>
-      <div class="list">${blocks || '<p class="empty">Aucun bridge connecté — lance <code>npm run bridge</code> sur ta machine.</p>'}</div>`;
+      <div class="list">${team}${blocks || '<p class="empty">Aucun bridge connecté — lance <code>npm run bridge</code> sur ta machine.</p>'}</div>`;
     p.querySelector('.list')!.scrollTop = scroll;
     if (typing) {
       const inp = p.querySelector<HTMLInputElement>(`.todo-add[data-task="${CSS.escape(typing.task ?? '')}"] input`);

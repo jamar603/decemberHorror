@@ -102,3 +102,18 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 #dev-tasks .td button { padding: 0 5px; }
 #dev-tasks .todo-add { display: flex; gap: 4px; margin-top: 6px; }
 #dev-tasks .todo-add input { flex: 1; min-width: 0; font: inherit; font-size: 12px; background: #0d0d0d; color: var(--fg); border: 1px solid #333; padding: 4px 6px; border-radius: 3px; }
+#dev-tasks .team h3 { margin-top: 12px; }
+#dev-tasks .cards { gap: 6px; }
+#dev-tasks .card { display: flex; gap: 10px; padding: 8px 10px; background: #0f0f0f; border: 1px solid #242424; border-radius: 3px; }
+#dev-tasks .card.busy { border-color: #e0a43a66; }
+#dev-tasks .card .dot { flex: none; width: 8px; height: 8px; margin-top: 5px; border-radius: 50%; background: #444; }
+#dev-tasks .card.busy .dot { background: var(--dev); box-shadow: 0 0 6px var(--dev); }
+#dev-tasks .card .who { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
+#dev-tasks .card .who small { color: var(--dim); font-size: 11px; }
+#dev-tasks .card .idle { font-size: 12px; color: var(--dim); }
+#dev-tasks .card .p { -webkit-line-clamp: 2; margin-top: 2px; }
+#dev-tasks .warn { font-size: 11px; color: #e06a5f; margin-top: 8px; overflow-wrap: anywhere; }
+#dev-tasks .feed { margin-top: 10px; gap: 2px; font-size: 11px; color: var(--dim); }
+#dev-tasks .feed li { overflow-wrap: anywhere; }
+#dev-tasks .feed time { color: #555; }
+#dev-tasks .feed b { color: var(--fg); font-weight: 500; }
