@@ -49,13 +49,16 @@ export type DevTaskOp = 'delete' | 'clear' | 'reset' | 'cancel' | 'retry'; // re
 // conversation Claude du bridge (reprise d'une tâche à l'autre) : taille du contexte / limite avant reset auto
 export interface DevSession { ctx: number; max: number; turns: number; active: boolean }
 
-export interface RoomInfo { code: string; players: number; max: number }
+export interface RoomInfo { code: string; players: number; max: number; priv?: boolean }
+// Liste des parties publiques (écran « Serveurs ») : pseudos pour repérer ses amis, âge en secondes
+export interface RoomListing extends RoomInfo { names: string[]; age: number }
 
 export type ClientMsg =
   | { t: 'hello'; name: string; dev?: string; keys?: string[]; look?: Look } // look : [personnage, teinte de peau]
   // recreate : après un redémarrage serveur, le client recrée sa partie avec le même code
-  | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean }
-  | { t: 'create' }
+  | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean; private?: boolean }
+  | { t: 'create'; private?: boolean } // private : absente de la liste des serveurs (solo, salon privé)
+  | { t: 'listRooms' }
   | { t: 'leaveRoom' }
   | { t: 'devPrompt'; bridge: string; prompt: string; image: string; fresh?: boolean }
   | { t: 'devTask'; bridge: string; op: DevTaskOp; id?: string }
@@ -65,6 +68,7 @@ export type ServerMsg =
   | { t: 'welcome'; id: number; version: VersionInfo | null; dev: boolean; owned?: string[] }
   | { t: 'joined'; room: RoomInfo; players: { id: number; name: string; look?: Look }[] }
   | { t: 'roomError'; msg: string }
+  | { t: 'rooms'; rooms: RoomListing[] }
   | { t: 'join'; id: number; name: string; look?: Look }
   | { t: 'leave'; id: number }
   | { t: 'version'; version: VersionInfo }

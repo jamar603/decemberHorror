@@ -34,6 +34,7 @@ F10 dans le jeu affiche le même tableau.
 |---|---|---|
 | `src/client/world/world.ts` | niveau, lumières, contenu | **hot-swap invisible** (aucun rechargement) |
 | `src/client/main.ts`, `net.ts`, `dev.ts`, `style.css`, `index.html` | shell : rendu, contrôles, réseau, menu, autres joueurs | rechargement discret (partie + position conservées) |
+| `src/client/ui/` | menu principal : `menu.ts` (pile d'écrans), `screens/*.ts` (un fichier par écran), `settings.ts`, `profile.ts` (stats/succès/amis, localStorage), `audio.ts` (ambiance procédurale), `i18n.ts` (FR/EN) | rechargement discret (comme le shell) |
 | `server/index.ts` | serveur temps réel uWebSockets.js | redémarrage (~1 s), reconnexion silencieuse |
 | `src/shared/protocol.ts` | protocole binaire/JSON | rester rétro-compatible (anciens clients encore connectés) |
 

@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>December</title>
+    <meta name="theme-color" content="#050607" />
     <link rel="stylesheet" href="/src/client/style.css" />
   </head>
   <body>
@@ -11,31 +12,13 @@
     <div id="crosshair"></div>
     <div id="hud"></div>
     <div id="room-bar" hidden>
-      <span>Clique pour jouer · ZQSD/WASD · Maj courir · M carte · Échap souris</span>
-      <button id="copy">Copier le lien</button>
-      <button id="quit">Quitter</button>
+      <span id="bar-hint"></span>
+      <button id="open-menu"></button>
+      <button id="copy"></button>
+      <button id="quit"></button>
     </div>
-    <div id="menu">
-      <div class="panel">
-        <h1>December</h1>
-        <label>Pseudo <input id="name" maxlength="16" placeholder="Ton pseudo" autocomplete="off" /></label>
-        <fieldset class="picker">
-          <legend>Personnage</legend>
-          <div id="chars"></div>
-          <p id="char-info"></p>
-        </fieldset>
-        <fieldset class="picker">
-          <legend>Couleur de peau</legend>
-          <div id="skins"></div>
-        </fieldset>
-        <button id="create" class="primary">Créer une partie</button>
-        <div class="row">
-          <input id="code" maxlength="5" placeholder="CODE" autocomplete="off" spellcheck="false" />
-          <button id="join">Rejoindre</button>
-        </div>
-        <p id="menu-error" role="alert"></p>
-      </div>
-    </div>
+    <!-- Menu principal : construit par src/client/ui/menu.ts -->
+    <div id="menu" hidden></div>
     <canvas id="map" width="220" height="220" hidden></canvas>
     <div id="toast"></div>
     <script type="module" src="/src/client/main.ts"></script>

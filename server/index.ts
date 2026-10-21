@@ -8,7 +8,7 @@ import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto
 import { cleanLook, DEFAULT_LOOK, type Look } from '../src/shared/characters';
 import {
   B_POS, B_SNAP, POS_BYTES, SNAP_ENTRY, TICK_HZ, MAX_PLAYERS, ROOM_MAX, CODE_LEN,
-  type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo,
+  type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo, type RoomListing,
 } from '../src/shared/protocol';
 
 const PORT = Number(process.env.PORT || 18031);
@@ -56,7 +56,7 @@ const canUse = (b: WS, p: Player) => { const o = (b.getUserData() as Bridge).own
 type Data = Player | Bridge;
 type WS = uWS.WebSocket<Data>;
 
-interface Room { code: string; members: Set<WS>; emptySince: number }
+interface Room { code: string; members: Set<WS>; emptySince: number; priv: boolean; created: number }
 
 const players = new Map<number, WS>();
 const rooms = new Map<string, Room>();
@@ -78,7 +78,13 @@ function boardChanged() {
   app.publish('dev', JSON.stringify({ t: 'bridges', bridges: list } satisfies ServerMsg), false);
   app.publish('bridges', JSON.stringify({ t: 'board', bridges: list } satisfies ToBridgeMsg), false);
 }
-const roomInfo = (r: Room): RoomInfo => ({ code: r.code, players: r.members.size, max: ROOM_MAX });
+const roomInfo = (r: Room): RoomInfo => ({ code: r.code, players: r.members.size, max: ROOM_MAX, priv: r.priv });
+// Parties publiques non vides, les plus peuplées d'abord
+const roomList = (): RoomListing[] => [...rooms.values()]
+  .filter((r) => !r.priv && r.members.size)
+  .sort((a, b) => b.members.size - a.members.size)
+  .slice(0, 50)
+  .map((r) => ({ ...roomInfo(r), names: [...r.members].map((w) => (w.getUserData() as Player).name).slice(0, ROOM_MAX), age: Math.round((Date.now() - r.created) / 1000) }));
 
 function newCode() {
   for (;;) {
@@ -88,9 +94,9 @@ function newCode() {
   }
 }
 
-function createRoom(code: string): Room | null {
+function createRoom(code: string, priv = false): Room | null {
   if (rooms.size >= MAX_ROOMS) return null;
-  const r: Room = { code, members: new Set(), emptySince: Date.now() };
+  const r: Room = { code, members: new Set(), emptySince: Date.now(), priv, created: Date.now() };
   rooms.set(code, r);
   return r;
 }
@@ -177,7 +183,7 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       const now = Date.now();
       if (now - p.lastCreate < 3000) return send(ws, { t: 'roomError', msg: 'Doucement…' });
       p.lastCreate = now;
-      const r = createRoom(newCode());
+      const r = createRoom(newCode(), m.private === true);
       if (!r) return send(ws, { t: 'roomError', msg: 'Trop de parties en cours' });
       return enterRoom(ws, p, r);
     }
@@ -185,12 +191,14 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       const code = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, CODE_LEN);
       let r = rooms.get(code);
       // Serveur redémarré pendant un déploiement : la partie est recréée à l'identique
-      if (!r && m.recreate && code.length === CODE_LEN) r = createRoom(code) ?? undefined;
+      if (!r && m.recreate && code.length === CODE_LEN) r = createRoom(code, m.private === true) ?? undefined;
       if (!r) return send(ws, { t: 'roomError', msg: 'Code introuvable' });
       return enterRoom(ws, p, r, m.pos);
     }
     case 'leaveRoom':
       return leaveRoom(ws, p);
+    case 'listRooms':
+      return send(ws, { t: 'rooms', rooms: roomList() });
     case 'devPrompt': {
       if (!p.dev) return;
       const b = bridges.get(String(m.bridge));

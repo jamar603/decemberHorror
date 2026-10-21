@@ -11,7 +11,7 @@ p.on('pageerror', (e) => console.error('PAGEERR', e.message));
 await p.goto('http://localhost:5173/');
 await p.fill('#name', 'Bot');
 await p.waitForTimeout(3000); // connexion au serveur
-await p.click('#create');
+await p.click('[data-action="solo"]'); // menu principal : partie solo (privée)
 await p.waitForTimeout(5000);
 await p.screenshot({ path: out, timeout: 120000 });
 let i = 1;

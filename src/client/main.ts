@@ -6,7 +6,12 @@ import type { CreateWorld, World } from './world/types';
 import { Net, type Snap } from './net';
 import { Dev, devKeys, devToken, toast } from './dev';
 import { createAvatar, type Avatar } from './avatar';
-import { ABILITIES, CHARACTERS, SKIN_TONES, cleanLook, type Ability, type Look } from '../shared/characters';
+import { ABILITIES, CHARACTERS, cleanLook, type Ability, type Look } from '../shared/characters';
+import { Menu } from './ui/menu';
+import type { GameApi } from './ui/types';
+import { t } from './ui/i18n';
+import { keyLabel, onSettings, settings, QUALITY_RATIO } from './ui/settings';
+import { setLastGame, trackGame, trackMet, trackMove } from './ui/profile';
 
 const STATE_KEY = 'december.state'; // partie + position conservées pendant un rechargement de mise à jour
 const NAME_KEY = 'december.name';
@@ -16,15 +21,13 @@ const INTERP_MS = 110; // retard d'affichage des autres joueurs (lissage du rés
 
 const $ = (id: string) => document.getElementById(id)!;
 const canvas = $('game') as HTMLCanvasElement;
-const menu = $('menu');
-const nameInput = $('name') as HTMLInputElement;
-const codeInput = $('code') as HTMLInputElement;
-const menuError = $('menu-error');
 const hud = $('hud');
 
 // --- Rendu ---
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: false });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+// densité de pixels : qualité × résolution de rendu (paramètres), plafonnée à 1.5
+const applyPixelRatio = () => renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY_RATIO[settings.quality]) * settings.renderScale);
+applyPixelRatio();
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(75, 1, 0.05, 300);
 camera.rotation.order = 'YXZ';
@@ -65,18 +68,20 @@ async function loadWorldFrom(url: string) {
 }
 addEventListener('world:hot', (e) => swapWorld((e as CustomEvent).detail));
 
-// --- Joueur local (1re personne, ZQSD/WASD : codes physiques, marchent en AZERTY comme en QWERTY) ---
+// --- Joueur local (1re personne, touches physiques configurables : marchent en AZERTY comme en QWERTY) ---
 const me = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), yaw: 0, pitch: 0 };
 const keys = new Set<string>();
 addEventListener('keydown', (e) => keys.add(e.code));
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 const locked = () => document.pointerLockElement === canvas;
-canvas.addEventListener('click', () => { if (room && !dev.isOpen) canvas.requestPointerLock(); });
+const lock = () => { try { (canvas.requestPointerLock() as unknown as Promise<void> | undefined)?.catch?.(() => {}); } catch {} };
+canvas.addEventListener('click', () => { if (room && !dev.isOpen && !menu.visible) lock(); });
 addEventListener('mousemove', (e) => {
   if (!locked()) return;
-  me.yaw -= e.movementX * 0.0022;
-  me.pitch = Math.max(-1.5, Math.min(1.5, me.pitch - e.movementY * 0.0022));
+  const k = 0.0022 * settings.sensitivity;
+  me.yaw -= e.movementX * k;
+  me.pitch = Math.max(-1.5, Math.min(1.5, me.pitch - e.movementY * k * (settings.invertY ? -1 : 1)));
 });
 const fwd = new THREE.Vector3(), side = new THREE.Vector3(), wish = new THREE.Vector3();
 function updatePlayer(dt: number) {
@@ -84,12 +89,13 @@ function updatePlayer(dt: number) {
   if (locked()) {
     fwd.set(-Math.sin(me.yaw), 0, -Math.cos(me.yaw));
     side.set(-fwd.z, 0, fwd.x);
-    if (keys.has('KeyW') || keys.has('ArrowUp')) wish.add(fwd);
-    if (keys.has('KeyS') || keys.has('ArrowDown')) wish.sub(fwd);
-    if (keys.has('KeyD') || keys.has('ArrowRight')) wish.add(side);
-    if (keys.has('KeyA') || keys.has('ArrowLeft')) wish.sub(side);
+    const b = settings.binds;
+    if (keys.has(b.forward) || keys.has('ArrowUp')) wish.add(fwd);
+    if (keys.has(b.back) || keys.has('ArrowDown')) wish.sub(fwd);
+    if (keys.has(b.right) || keys.has('ArrowRight')) wish.add(side);
+    if (keys.has(b.left) || keys.has('ArrowLeft')) wish.sub(side);
     const fast = myChar().ability === 'speed'; // capacité « Rapide » : +25 %
-    if (wish.lengthSq()) wish.normalize().multiplyScalar((keys.has('ShiftLeft') ? 7 : 4) * (fast ? 1.25 : 1));
+    if (wish.lengthSq()) wish.normalize().multiplyScalar((keys.has(b.sprint) ? 7 : 4) * (fast ? 1.25 : 1));
   }
   me.vel.lerp(wish, 1 - Math.exp(-12 * dt)); // inertie légère
   me.pos.addScaledVector(me.vel, dt);
@@ -98,7 +104,7 @@ function updatePlayer(dt: number) {
 }
 
 // --- Autres joueurs : avatar du personnage choisi + pseudo, interpolés ---
-interface Remote { group: THREE.Group; avatar: Avatar; buf: { t: number; x: number; y: number; z: number; yaw: number }[] }
+interface Remote { name: string; look: Look; group: THREE.Group; avatar: Avatar; buf: { t: number; x: number; y: number; z: number; yaw: number }[] }
 const remotes = new Map<number, Remote>();
 function label(text: string) {
   const c = document.createElement('canvas');
@@ -115,12 +121,15 @@ function label(text: string) {
 }
 function addRemote(id: number, name: string, l?: Look) {
   if (id === net.id || remotes.has(id)) return;
-  const avatar = createAvatar(cleanLook(l)); // ancien client sans look : personnage par défaut
+  const look = cleanLook(l); // ancien client sans look : personnage par défaut
+  const avatar = createAvatar(look);
   const group = avatar.group;
   group.add(label(name));
   group.visible = false; // jusqu'à la première position reçue
   scene.add(group);
-  remotes.set(id, { group, avatar, buf: [] });
+  remotes.set(id, { name, look, group, avatar, buf: [] });
+  trackMet(name);
+  menu.emit('players');
 }
 function removeRemote(id: number) {
   const r = remotes.get(id);
@@ -131,6 +140,7 @@ function removeRemote(id: number) {
   });
   r.avatar.dispose();
   remotes.delete(id);
+  menu.emit('players');
 }
 function clearRemotes() { for (const id of [...remotes.keys()]) removeRemote(id); }
 function onSnap(list: Snap[]) {
@@ -173,7 +183,8 @@ let restorePos: [number, number, number, number] | null = null;
 
 const seedOf = (code: string) => { let h = 2166136261; for (const c of code) h = Math.imul(h ^ c.charCodeAt(0), 16777619); return h >>> 0; };
 const myShell = new URL(import.meta.url).pathname; // en prod : /assets/index-<hash>.js
-const myName = () => nameInput.value.trim().slice(0, 16) || 'Inconnu';
+let playerName = '';
+const myName = () => playerName.trim().slice(0, 16) || 'Inconnu';
 
 function onVersion(v: VersionInfo | null) {
   if (!v || import.meta.env.DEV) return;
@@ -198,7 +209,8 @@ function hello() {
 net.onOpen = () => {
   hello();
   // reconnexion (redémarrage serveur au déploiement) : on revient dans la même partie, au même endroit
-  if (room) net.send({ t: 'join', code: room.code, pos: [me.pos.x, me.pos.y, me.pos.z, me.yaw], recreate: true });
+  if (room) net.send({ t: 'join', code: room.code, pos: [me.pos.x, me.pos.y, me.pos.z, me.yaw], recreate: true, private: room.priv });
+  menu.emit('net');
 };
 net.onSnap = onSnap;
 net.onMsg = (m) => {
@@ -214,47 +226,85 @@ net.onMsg = (m) => {
       for (const p of m.players) addRemote(p.id, p.name, p.look);
       if (first && !restorePos && world) { me.pos.copy(world.spawn); me.yaw = world.spawnYaw; me.pitch = 0; }
       history.replaceState(null, '', `?room=${room.code}`);
-      menu.hidden = true;
-      menuError.textContent = '';
+      setLastGame({ code: room.code, at: Date.now(), priv: !!room.priv });
+      if (first && !restorePos) { trackGame(creating, look[0]); spawnAt.copy(me.pos); menu.onJoined(); }
+      creating = false;
+      menu.emit('players');
       break;
     }
-    case 'roomError': menuError.textContent = m.msg; break;
+    case 'roomError': creating = false; menu.onRoomError(m.msg); break;
+    case 'rooms': menu.onRooms(m.rooms); break;
     case 'join': addRemote(m.id, m.name, m.look); break;
     case 'leave': removeRemote(m.id); break;
   }
 };
 
-// --- Menu ---
-$('create').addEventListener('click', () => { hello(); net.send({ t: 'create' }); });
-$('join').addEventListener('click', () => {
-  const code = codeInput.value.trim().toUpperCase();
-  if (!code) { codeInput.focus(); return; }
-  hello();
-  net.send({ t: 'join', code });
-});
-codeInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') $('join').click(); });
+// --- Menu (ui/) : le shell expose GameApi, le menu ne touche jamais directement au réseau ---
+let creating = false;
+const spawnAt = new THREE.Vector3();
+let nameTimer = 0;
+const api: GameApi = {
+  get room() { return room; },
+  get online() { return net.open; },
+  players: () => [
+    { id: net.id, name: myName(), look, me: true },
+    ...[...remotes.entries()].map(([id, r]) => ({ id, name: r.name, look: r.look })),
+  ],
+  name: myName,
+  setName(n) {
+    playerName = n.slice(0, 16);
+    try { localStorage.setItem(NAME_KEY, playerName.trim()); } catch {}
+    clearTimeout(nameTimer);
+    nameTimer = window.setTimeout(() => { if (!room) hello(); }, 300); // re-hello hors partie : le serveur met à jour le pseudo
+  },
+  look: () => look,
+  setLook,
+  create(priv) { creating = true; hello(); net.send({ t: 'create', private: priv }); },
+  join(code, o) { hello(); net.send({ t: 'join', code: code.trim().toUpperCase(), recreate: o?.recreate, private: o?.priv }); },
+  play() { menu.close(); lock(); },
+  leave() {
+    if (room) setLastGame({ code: room.code, at: Date.now(), priv: !!room.priv });
+    net.send({ t: 'leaveRoom' });
+    room = null;
+    mapOpen = false;
+    clearRemotes();
+    history.replaceState(null, '', '/');
+    menu.onLeft();
+  },
+  listRooms() { net.send({ t: 'listRooms' }); },
+  link: (code = room?.code ?? '') => `${location.origin}/?room=${code}`,
+};
+const menu = new Menu($('menu'), api);
+
 $('copy').addEventListener('click', () => {
-  navigator.clipboard?.writeText(`${location.origin}/?room=${room?.code}`).then(() => toast('Lien copié', 'ok', 2000), () => {});
+  navigator.clipboard?.writeText(api.link()).then(() => toast(t('toast.copied'), 'ok', 2000), () => {});
 });
-$('quit').addEventListener('click', () => {
-  net.send({ t: 'leaveRoom' });
-  room = null;
-  clearRemotes();
-  history.replaceState(null, '', '/');
-  menu.hidden = false;
+$('quit').addEventListener('click', () => menu.open('quit', 'room'));
+$('open-menu').addEventListener('click', () => menu.open('lobby', 'pause'));
+// Échap (souris déjà libérée) : menu pause
+addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && room && !menu.visible && !locked() && !dev.isOpen) menu.open('lobby', 'pause');
 });
 
-// --- Choix du personnage + teinte de peau (menu) ---
-const charList = $('chars'), skinList = $('skins'), charInfo = $('char-info');
+// --- Paramètres appliqués au rendu / HUD ---
+const crosshair = $('crosshair');
+function paintRoomBar() {
+  const b = settings.binds;
+  $('bar-hint').textContent = t('bar.hint', {
+    keys: [b.forward, b.left, b.back, b.right].map(keyLabel).join(''), sprint: keyLabel(b.sprint), map: keyLabel(b.map),
+  });
+  $('open-menu').textContent = t('bar.menu'); $('copy').textContent = t('bar.copy'); $('quit').textContent = t('bar.quit');
+}
+onSettings((s) => {
+  applyPixelRatio();
+  camera.fov = s.fov; camera.updateProjectionMatrix();
+  canvas.style.filter = s.brightness === 1 ? '' : `brightness(${s.brightness})`;
+  paintRoomBar();
+});
+
+// --- Personnage + teinte de peau : aperçu 3D (écran Personnage du menu) ---
 let preview: Avatar | null = null;
-function renderPicker() {
-  charList.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === look[0])));
-  skinList.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === look[1])));
-  const ab = ABILITIES[myChar().ability];
-  charInfo.innerHTML = '';
-  const strong = document.createElement('strong');
-  strong.textContent = `${myChar().name} · ${ab.label}`;
-  charInfo.append(strong, document.createTextNode(` — ${ab.desc}`));
+function refreshPreview() {
   if (preview) { scene.remove(preview.group); preview.dispose(); }
   preview = createAvatar(look);
   scene.add(preview.group);
@@ -262,37 +312,25 @@ function renderPicker() {
 function setLook(l: Look) {
   look = cleanLook(l);
   try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch {}
-  renderPicker();
+  refreshPreview();
   if (!room) hello(); // re-hello hors partie : le serveur met à jour le look
 }
-CHARACTERS.forEach((c, i) => {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.className = c.gender;
-  b.title = `${c.name} — ${ABILITIES[c.ability].label}`;
-  const n = document.createElement('span'); n.textContent = c.name;
-  const a = document.createElement('small'); a.textContent = ABILITIES[c.ability].short;
-  b.append(n, a);
-  b.addEventListener('click', () => setLook([i, look[1]]));
-  charList.append(b);
-});
-SKIN_TONES.forEach((t, i) => {
-  const b = document.createElement('button');
-  b.type = 'button';
-  b.style.background = `#${t.toString(16).padStart(6, '0')}`;
-  b.setAttribute('aria-label', `Teinte de peau ${i + 1} sur ${SKIN_TONES.length}`);
-  b.addEventListener('click', () => setLook([look[0], i]));
-  skinList.append(b);
-});
 const previewDir = new THREE.Vector3();
+// lumière d'aperçu toujours dans la scène (intensité 0 hors écran Personnage : pas de recompilation des shaders)
+const previewLight = new THREE.PointLight(0xffe6d6, 0, 7, 2);
+scene.add(previewLight);
 function updatePreview(dt: number) {
+  previewLight.intensity = 0;
   if (!preview) return;
-  preview.group.visible = !room;
-  if (room) return;
+  preview.group.visible = !room && menu.preview;
+  if (!preview.group.visible) return;
   // à droite du panneau, face caméra, tourne doucement sur lui-même
   const d = 3.2, half = d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
-  previewDir.set(Math.min(half * 0.5, 1.9), -1.75, -d).applyEuler(camera.rotation);
+  previewDir.set(Math.min(half * 0.5, 2.2), -1.75, -d).applyEuler(camera.rotation);
   preview.group.position.copy(camera.position).add(previewDir);
+  previewLight.position.copy(camera.position).lerp(preview.group.position, 0.45);
+  previewLight.position.y += 0.6;
+  previewLight.intensity = 5;
   preview.group.rotation.y += dt * 0.5;
   preview.animate(0, dt);
 }
@@ -302,7 +340,7 @@ const mapCanvas = $('map') as HTMLCanvasElement;
 const mapG = mapCanvas.getContext('2d')!;
 let mapOpen = false;
 addEventListener('keydown', (e) => {
-  if (e.code !== 'KeyM' || !room || dev.isOpen || document.activeElement instanceof HTMLInputElement) return;
+  if (e.code !== settings.binds.map || !room || dev.isOpen || menu.visible || document.activeElement instanceof HTMLInputElement) return;
   if (myChar().ability !== 'map') return toast('Seul le Cartographe a une carte', 'err', 2000);
   mapOpen = !mapOpen;
 });
@@ -347,13 +385,17 @@ function grab() {
 }
 
 // --- Boucle ---
-let last = performance.now(), netAcc = 0, menuYaw = 0;
+let last = performance.now(), netAcc = 0, menuYaw = 0, wasOnline = false, fps = 60;
+const lastPos = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   const now = performance.now();
   const dt = Math.min((now - last) / 1000, 0.1);
   last = now;
-  if (room) updatePlayer(dt);
-  else { // menu : la caméra tourne lentement
+  if (room) {
+    lastPos.copy(me.pos);
+    updatePlayer(dt);
+    if (locked()) trackMove(dt, Math.hypot(me.pos.x - lastPos.x, me.pos.z - lastPos.z), Math.hypot(me.pos.x - spawnAt.x, me.pos.z - spawnAt.z), remotes.size + 1);
+  } else { // menu : la caméra tourne lentement
     menuYaw += dt * 0.08;
     camera.position.set(0, 3, 0);
     camera.rotation.set(-0.15, menuYaw, 0);
@@ -364,18 +406,22 @@ renderer.setAnimationLoop(() => {
   world?.update(dt, now / 1000, me.pos);
   netAcc += dt;
   if (room && netAcc >= 0.05) { netAcc = 0; net.sendPos(me.pos.x, me.pos.y, me.pos.z, me.yaw); }
-  hud.textContent = room ? `${myChar().name} (${ABILITIES[myChar().ability].label}) · Partie ${room.code} · ${remotes.size + 1} joueur${remotes.size ? 's' : ''}${net.open ? '' : ' · reconnexion…'}` : '';
-  $('room-bar').hidden = !room || locked();
+  if (net.open !== wasOnline) { wasOnline = net.open; menu.emit('net'); }
+  if (dt > 0) fps += (1 / dt - fps) * 0.05;
+  const info = room && !menu.visible
+    ? t('hud.room', { char: myChar().name, ability: ABILITIES[myChar().ability].label, code: room.code, n: remotes.size + 1 }) + (net.open ? '' : ` · ${t('hud.reconnect')}`)
+    : '';
+  hud.textContent = [info, settings.showFps ? `${Math.round(fps)} FPS` : ''].filter(Boolean).join(' · ');
+  $('room-bar').hidden = !room || locked() || menu.visible;
+  crosshair.hidden = !settings.crosshair || !room || menu.visible;
   renderer.render(scene, camera);
   if (captureResolve) { captureResolve(grab()); captureResolve = null; }
 });
 
 // --- Démarrage ---
 (async () => {
-  try { nameInput.value = localStorage.getItem(NAME_KEY) || ''; look = cleanLook(JSON.parse(localStorage.getItem(LOOK_KEY) || 'null')); } catch {}
-  renderPicker();
-  const urlRoom = new URLSearchParams(location.search).get('room');
-  if (urlRoom) codeInput.value = urlRoom.toUpperCase().slice(0, 5);
+  try { playerName = localStorage.getItem(NAME_KEY) || ''; look = cleanLook(JSON.parse(localStorage.getItem(LOOK_KEY) || 'null')); } catch {}
+  refreshPreview();
 
   let restored: { room: RoomInfo | null; pos: [number, number, number, number]; pitch: number; at: number } | null = null;
   try { restored = JSON.parse(sessionStorage.getItem(STATE_KEY) || 'null'); sessionStorage.removeItem(STATE_KEY); } catch {}
@@ -386,8 +432,8 @@ renderer.setAnimationLoop(() => {
     restorePos = restored.pos;
     me.pos.set(restorePos[0], restorePos[1], restorePos[2]);
     me.yaw = restorePos[3]; me.pitch = restored.pitch;
-    menu.hidden = true;
-  }
+    menu.root.hidden = true;
+  } else menu.open('home');
 
   if (import.meta.env.DEV) {
     const mod = await import('./world/world');
