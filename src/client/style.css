@@ -160,3 +160,4 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 #dev-shot button.add { margin-left: auto; font-size: 12px; }
 #dev-shot button.add:disabled { opacity: .4; cursor: not-allowed; }
 #dev-shot button.add + button.send { margin-left: 0; }
+#dev-shot .box { overflow-y: auto; }
