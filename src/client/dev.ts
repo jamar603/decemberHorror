@@ -10,6 +10,7 @@ const KEY = 'december.devToken';
 const KEYS = 'december.devKeys'; // clés des bridges dont on a le droit d'utiliser le Claude
 const DRAFT = 'december.devDraft'; // { prompt, target } — sessionStorage
 const DRAFT_IMG = 'december.devDraftImg';
+const DRAFT_LIST = 'december.devDraftList'; // demandes déjà ajoutées à la liste, pas encore envoyées
 const PHASES: [string, string][] = [['read', 'Lecture'], ['edit', 'Modif'], ['check', 'Vérif'], ['push', 'Push']];
 const HISTORY = 'december.devHistory'; // derniers prompts envoyés (↑ dans la zone de texte)
 const TARGET = 'december.devTarget';
@@ -187,9 +188,11 @@ export class Dev {
       <header><b>Nouvelle demande</b><span class="target"></span><button class="cancel" title="Annuler (Échap)">✕</button></header>
       <div class="stage"><canvas></canvas></div>
       <div class="tools"><span>Entoure ou souligne ce qui doit changer :</span><button class="undo" title="Annuler le dernier trait (Ctrl+Z)">↶ Trait</button><button class="wipe">Effacer</button></div>
+      <ol class="queue" aria-label="Demandes à envoyer"></ol>
       <textarea placeholder="Décris la modification à faire…  (↑ : tes derniers prompts)" aria-label="Description de la modification"></textarea>
       <div class="row"><select aria-label="Claude cible"></select>
         <label class="fresh"><input type="checkbox" /> Nouvelle conversation</label>
+        <button class="add" title="Garde la fenêtre ouverte pour préparer la demande suivante">+ Ajouter à la liste <kbd>Ctrl ⇧ ↵</kbd></button>
         <button class="send primary">Envoyer <kbd>Ctrl ↵</kbd></button></div>
       <div class="hint"></div>
     </div>`;
@@ -220,24 +223,68 @@ export class Dev {
     ta.addEventListener('input', () => ss.set(DRAFT, JSON.stringify({ prompt: ta.value })));
     let hist = -1;
     const history = (): string[] => { try { return JSON.parse(localStorage.getItem(HISTORY) || '[]'); } catch { return []; } };
-    const close = () => { m.remove(); this.modal = null; ss.del(DRAFT, DRAFT_IMG); this.onModal(this.isOpen); };
-    const send = () => {
+    // liste de demandes : on en prépare autant qu'on veut, elles partent dans l'ordre et le bridge les exécute UNE par UNE (file d'attente)
+    type Item = { prompt: string; image: string; fresh: boolean };
+    let items: Item[] = [];
+    try { items = JSON.parse(ss.get(DRAFT_LIST) || '[]'); } catch {}
+    const fresh = m.querySelector<HTMLInputElement>('.fresh input')!;
+    const q = m.querySelector('.queue')!;
+    const sendBtn = m.querySelector<HTMLButtonElement>('.send')!;
+    const snap = () => (strokes.length ? cv.toDataURL('image/jpeg', 0.85) : img);
+    const refresh = () => {
+      ss.set(DRAFT_LIST, JSON.stringify(items));
+      q.innerHTML = items.map((it, i) => `<li><span class="n">${i + 1}</span><img alt="" src="${it.image}" /><span class="t">${esc(it.prompt)}${it.fresh ? ' <em>nouvelle conversation</em>' : ''}</span>
+        <button data-up="${i}" title="Monter" ${i ? '' : 'disabled'}>↑</button><button data-down="${i}" title="Descendre" ${i < items.length - 1 ? '' : 'disabled'}>↓</button>
+        <button data-edit="${i}" title="Rééditer">✎</button><button data-del="${i}" title="Retirer de la liste">✕</button></li>`).join('');
+      const n = items.length + (ta.value.trim() ? 1 : 0);
+      sendBtn.innerHTML = `${n > 1 ? `Envoyer ${n} demandes` : 'Envoyer'} <kbd>Ctrl ↵</kbd>`;
+    };
+    const add = () => {
       const prompt = ta.value.trim();
-      if (!prompt || !sel.value) { ta.focus(); return; }
+      if (!prompt) { ta.focus(); return; }
+      items.push({ prompt, image: snap(), fresh: fresh.checked });
+      fresh.checked = false; ta.value = ''; ss.set(DRAFT, '{}');
+      strokes.length = 0; redraw(); refresh(); ta.focus();
+    };
+    q.addEventListener('click', (e) => {
+      const b = (e.target as HTMLElement).closest<HTMLElement>('button');
+      if (!b) return;
+      const d = b.dataset;
+      if (d.up !== undefined && +d.up > 0) { const i = +d.up; [items[i - 1], items[i]] = [items[i], items[i - 1]]; }
+      else if (d.down !== undefined && +d.down < items.length - 1) { const i = +d.down; [items[i + 1], items[i]] = [items[i], items[i + 1]]; }
+      else if (d.del !== undefined) items.splice(+d.del, 1);
+      else if (d.edit !== undefined) { // remet la demande dans la zone de texte (la précédente en cours d'écriture passe en liste)
+        const [it] = items.splice(+d.edit, 1);
+        if (ta.value.trim()) items.push({ prompt: ta.value.trim(), image: snap(), fresh: fresh.checked });
+        ta.value = it.prompt; fresh.checked = it.fresh; ss.set(DRAFT, JSON.stringify({ prompt: ta.value })); ta.focus();
+      }
+      refresh();
+    });
+    // fermer sans envoyer garde la liste (elle revient au prochain F9) ; envoyer la vide
+    const close = (sent = false) => { m.remove(); this.modal = null; ss.del(DRAFT, DRAFT_IMG); if (sent) ss.del(DRAFT_LIST); this.onModal(this.isOpen); };
+    const send = () => {
+      const cur = ta.value.trim();
+      const all: Item[] = [...items];
+      if (cur) all.push({ prompt: cur, image: snap(), fresh: fresh.checked });
+      if (!all.length || !sel.value) { ta.focus(); return; }
       try {
         localStorage.setItem(TARGET, sel.value);
-        localStorage.setItem(HISTORY, JSON.stringify([prompt, ...history().filter((x) => x !== prompt)].slice(0, 15)));
+        const h = history().filter((x) => !all.some((a) => a.prompt === x));
+        localStorage.setItem(HISTORY, JSON.stringify([...all.map((a) => a.prompt).reverse(), ...h].slice(0, 15)));
       } catch {}
-      const out = strokes.length ? cv.toDataURL('image/jpeg', 0.85) : img;
-      this.net.send({ t: 'devPrompt', bridge: sel.value, prompt, image: out, fresh: m.querySelector<HTMLInputElement>('.fresh input')!.checked });
-      toast('Envoi à Claude…');
-      close();
+      for (const it of all) this.net.send({ t: 'devPrompt', bridge: sel.value, prompt: it.prompt, image: it.image, fresh: it.fresh });
+      toast(all.length > 1 ? `${all.length} demandes envoyées : elles s'exécutent une par une` : 'Envoi à Claude…');
+      close(true);
     };
-    m.querySelector('.cancel')!.addEventListener('click', close);
+    ta.addEventListener('input', refresh);
+    refresh();
+    m.querySelector('.cancel')!.addEventListener('click', () => close());
+    m.querySelector('.add')!.addEventListener('click', add);
     m.querySelector('.send')!.addEventListener('click', send);
     m.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Escape') close();
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && e.shiftKey) add();
       else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send();
       else if (e.key === 'z' && (e.ctrlKey || e.metaKey) && e.target !== ta) { strokes.pop(); redraw(); }
       else if (e.target === ta && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
@@ -266,6 +313,7 @@ export class Dev {
     const hint = m.querySelector('.hint')!;
     const target = m.querySelector('.target')!;
     send.disabled = !mine.length;
+    m.querySelector<HTMLButtonElement>('.add')!.disabled = !mine.length;
     if (!mine.length) {
       sel.hidden = true; target.textContent = '';
       hint.innerHTML = `<span class="warn">Aucun Claude à toi n'est connecté : lance <code>npm run bridge</code> et ouvre le lien affiché dans le terminal.</span>`;
@@ -278,7 +326,7 @@ export class Dev {
     const live = b.tasks.filter((t) => t.state === 'running' || t.state === 'pending').length;
     const se = b.session;
     target.innerHTML = `→ <b>${esc(b.host.split('@')[0])}</b>${live ? ` · ${live} tâche${live > 1 ? 's' : ''} avant` : ' · libre'}`;
-    hint.textContent = `${se?.active ? `Conversation en cours (${Math.round(se.ctx / 1000)}k / ${Math.round(se.max / 1000)}k tokens) · ` : ''}Échap annule · une tâche à la fois, les suivantes attendent · F10 = suivi`;
+    hint.textContent = `${se?.active ? `Conversation en cours (${Math.round(se.ctx / 1000)}k / ${Math.round(se.max / 1000)}k tokens) · ` : ''}Échap ferme (la liste est gardée) · les demandes s'exécutent une par une, dans l'ordre · F10 = suivi`;
     sel.onchange = () => this.fillTargets();
   }
 
