@@ -5,9 +5,12 @@ import type { RoomInfo, VersionInfo } from '../shared/protocol';
 import type { CreateWorld, World } from './world/types';
 import { Net, type Snap } from './net';
 import { Dev, devKeys, devToken, toast } from './dev';
+import { createAvatar, type Avatar } from './avatar';
+import { ABILITIES, CHARACTERS, SKIN_TONES, cleanLook, type Ability, type Look } from '../shared/characters';
 
 const STATE_KEY = 'december.state'; // partie + position conservées pendant un rechargement de mise à jour
 const NAME_KEY = 'december.name';
+const LOOK_KEY = 'december.look';
 const EYE = 1.6;
 const INTERP_MS = 110; // retard d'affichage des autres joueurs (lissage du réseau)
 
@@ -35,7 +38,14 @@ addEventListener('resize', applySize);
 
 // --- Monde hot-swappable ---
 let seed = 0;
-const ctx = { scene, camera, renderer, get seed() { return seed; } };
+let look: Look = cleanLook(null);
+const myChar = () => CHARACTERS[look[0]];
+const ctx = {
+  scene, camera, renderer,
+  get seed() { return seed; },
+  get character() { return myChar(); },
+  hasAbility: (a: Ability) => myChar().ability === a,
+};
 let world: World | null = null;
 let worldUrl = '';
 let swapQueue = Promise.resolve();
@@ -78,7 +88,8 @@ function updatePlayer(dt: number) {
     if (keys.has('KeyS') || keys.has('ArrowDown')) wish.sub(fwd);
     if (keys.has('KeyD') || keys.has('ArrowRight')) wish.add(side);
     if (keys.has('KeyA') || keys.has('ArrowLeft')) wish.sub(side);
-    if (wish.lengthSq()) wish.normalize().multiplyScalar(keys.has('ShiftLeft') ? 7 : 4);
+    const fast = myChar().ability === 'speed'; // capacité « Rapide » : +25 %
+    if (wish.lengthSq()) wish.normalize().multiplyScalar((keys.has('ShiftLeft') ? 7 : 4) * (fast ? 1.25 : 1));
   }
   me.vel.lerp(wish, 1 - Math.exp(-12 * dt)); // inertie légère
   me.pos.addScaledVector(me.vel, dt);
@@ -86,11 +97,9 @@ function updatePlayer(dt: number) {
   camera.rotation.set(me.pitch, me.yaw, 0);
 }
 
-// --- Autres joueurs : capsule colorée + pseudo, interpolés ---
-interface Remote { group: THREE.Group; buf: { t: number; x: number; y: number; z: number; yaw: number }[] }
+// --- Autres joueurs : avatar du personnage choisi + pseudo, interpolés ---
+interface Remote { group: THREE.Group; avatar: Avatar; buf: { t: number; x: number; y: number; z: number; yaw: number }[] }
 const remotes = new Map<number, Remote>();
-const capsule = new THREE.CapsuleGeometry(0.35, 1.1, 4, 12);
-const nose = new THREE.BoxGeometry(0.2, 0.12, 0.25);
 function label(text: string) {
   const c = document.createElement('canvas');
   c.width = 256; c.height = 64;
@@ -104,18 +113,14 @@ function label(text: string) {
   s.position.y = 2.2;
   return s;
 }
-function addRemote(id: number, name: string) {
+function addRemote(id: number, name: string, l?: Look) {
   if (id === net.id || remotes.has(id)) return;
-  const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(((id * 0.618) % 1), 0.6, 0.55) });
-  const body = new THREE.Mesh(capsule, mat);
-  body.position.y = 0.9;
-  const n = new THREE.Mesh(nose, mat);
-  n.position.set(0, 1.5, -0.38); // indique la direction du regard
-  const group = new THREE.Group();
-  group.add(body, n, label(name));
+  const avatar = createAvatar(cleanLook(l)); // ancien client sans look : personnage par défaut
+  const group = avatar.group;
+  group.add(label(name));
   group.visible = false; // jusqu'à la première position reçue
   scene.add(group);
-  remotes.set(id, { group, buf: [] });
+  remotes.set(id, { group, avatar, buf: [] });
 }
 function removeRemote(id: number) {
   const r = remotes.get(id);
@@ -123,8 +128,8 @@ function removeRemote(id: number) {
   scene.remove(r.group);
   r.group.traverse((o) => {
     if (o instanceof THREE.Sprite) { o.material.map?.dispose(); o.material.dispose(); }
-    else if (o instanceof THREE.Mesh) (o.material as THREE.Material).dispose();
   });
+  r.avatar.dispose();
   remotes.delete(id);
 }
 function clearRemotes() { for (const id of [...remotes.keys()]) removeRemote(id); }
@@ -137,7 +142,8 @@ function onSnap(list: Snap[]) {
     if (r.buf.length > 10) r.buf.shift();
   }
 }
-function updateRemotes() {
+const prevPos = new THREE.Vector3();
+function updateRemotes(dt: number) {
   const t = performance.now() - INTERP_MS;
   for (const r of remotes.values()) {
     const b = r.buf;
@@ -147,7 +153,9 @@ function updateRemotes() {
     const k = c.t > a.t ? Math.max(0, Math.min(1, (t - a.t) / (c.t - a.t))) : 1;
     let dy = c.yaw - a.yaw;
     dy -= Math.round(dy / (Math.PI * 2)) * Math.PI * 2;
+    prevPos.copy(r.group.position);
     r.group.position.set(a.x + (c.x - a.x) * k, a.y + (c.y - a.y) * k, a.z + (c.z - a.z) * k);
+    if (dt > 0 && r.group.visible) r.avatar.animate(Math.hypot(r.group.position.x - prevPos.x, r.group.position.z - prevPos.z) / dt, dt);
     r.group.rotation.y = a.yaw + dy * k;
     r.group.visible = true;
   }
@@ -184,7 +192,7 @@ function reloadPreservingState() {
 
 function hello() {
   try { localStorage.setItem(NAME_KEY, myName()); } catch {}
-  net.send({ t: 'hello', name: myName(), dev: devToken(), keys: devKeys() });
+  net.send({ t: 'hello', name: myName(), dev: devToken(), keys: devKeys(), look });
 }
 
 net.onOpen = () => {
@@ -203,7 +211,7 @@ net.onMsg = (m) => {
       room = m.room;
       seed = seedOf(room.code);
       clearRemotes();
-      for (const p of m.players) addRemote(p.id, p.name);
+      for (const p of m.players) addRemote(p.id, p.name, p.look);
       if (first && !restorePos && world) { me.pos.copy(world.spawn); me.yaw = world.spawnYaw; me.pitch = 0; }
       history.replaceState(null, '', `?room=${room.code}`);
       menu.hidden = true;
@@ -211,7 +219,7 @@ net.onMsg = (m) => {
       break;
     }
     case 'roomError': menuError.textContent = m.msg; break;
-    case 'join': addRemote(m.id, m.name); break;
+    case 'join': addRemote(m.id, m.name, m.look); break;
     case 'leave': removeRemote(m.id); break;
   }
 };
@@ -235,6 +243,96 @@ $('quit').addEventListener('click', () => {
   history.replaceState(null, '', '/');
   menu.hidden = false;
 });
+
+// --- Choix du personnage + teinte de peau (menu) ---
+const charList = $('chars'), skinList = $('skins'), charInfo = $('char-info');
+let preview: Avatar | null = null;
+function renderPicker() {
+  charList.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === look[0])));
+  skinList.querySelectorAll('button').forEach((b, i) => b.setAttribute('aria-pressed', String(i === look[1])));
+  const ab = ABILITIES[myChar().ability];
+  charInfo.innerHTML = '';
+  const strong = document.createElement('strong');
+  strong.textContent = `${myChar().name} · ${ab.label}`;
+  charInfo.append(strong, document.createTextNode(` — ${ab.desc}`));
+  if (preview) { scene.remove(preview.group); preview.dispose(); }
+  preview = createAvatar(look);
+  scene.add(preview.group);
+}
+function setLook(l: Look) {
+  look = cleanLook(l);
+  try { localStorage.setItem(LOOK_KEY, JSON.stringify(look)); } catch {}
+  renderPicker();
+  if (!room) hello(); // re-hello hors partie : le serveur met à jour le look
+}
+CHARACTERS.forEach((c, i) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = c.gender;
+  b.title = `${c.name} — ${ABILITIES[c.ability].label}`;
+  const n = document.createElement('span'); n.textContent = c.name;
+  const a = document.createElement('small'); a.textContent = ABILITIES[c.ability].short;
+  b.append(n, a);
+  b.addEventListener('click', () => setLook([i, look[1]]));
+  charList.append(b);
+});
+SKIN_TONES.forEach((t, i) => {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.style.background = `#${t.toString(16).padStart(6, '0')}`;
+  b.setAttribute('aria-label', `Teinte de peau ${i + 1} sur ${SKIN_TONES.length}`);
+  b.addEventListener('click', () => setLook([look[0], i]));
+  skinList.append(b);
+});
+const previewDir = new THREE.Vector3();
+function updatePreview(dt: number) {
+  if (!preview) return;
+  preview.group.visible = !room;
+  if (room) return;
+  // à droite du panneau, face caméra, tourne doucement sur lui-même
+  const d = 3.2, half = d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
+  previewDir.set(Math.min(half * 0.5, 1.9), -1.75, -d).applyEuler(camera.rotation);
+  preview.group.position.copy(camera.position).add(previewDir);
+  preview.group.rotation.y += dt * 0.5;
+  preview.animate(0, dt);
+}
+
+// --- Carte (capacité « Cartographe », touche M) ---
+const mapCanvas = $('map') as HTMLCanvasElement;
+const mapG = mapCanvas.getContext('2d')!;
+let mapOpen = false;
+addEventListener('keydown', (e) => {
+  if (e.code !== 'KeyM' || !room || dev.isOpen || document.activeElement instanceof HTMLInputElement) return;
+  if (myChar().ability !== 'map') return toast('Seul le Cartographe a une carte', 'err', 2000);
+  mapOpen = !mapOpen;
+});
+function drawMap() {
+  mapCanvas.hidden = !(mapOpen && room && myChar().ability === 'map');
+  if (mapCanvas.hidden) return;
+  const S = mapCanvas.width, R = S / 2, scale = R / 60; // rayon affiché : 60 m
+  mapG.clearRect(0, 0, S, S);
+  mapG.save();
+  mapG.beginPath(); mapG.arc(R, R, R - 2, 0, Math.PI * 2); mapG.clip();
+  mapG.fillStyle = 'rgba(12,16,20,.82)'; mapG.fillRect(0, 0, S, S);
+  mapG.translate(R, R); mapG.rotate(me.yaw); // haut de la carte = direction du regard
+  mapG.strokeStyle = 'rgba(255,255,255,.08)'; mapG.lineWidth = 1;
+  for (let g = -60; g <= 60; g += 10) {
+    const ox = (g - (me.pos.x % 10)) * scale, oz = (g - (me.pos.z % 10)) * scale;
+    mapG.beginPath(); mapG.moveTo(ox, -S); mapG.lineTo(ox, S); mapG.moveTo(-S, oz); mapG.lineTo(S, oz); mapG.stroke();
+  }
+  mapG.fillStyle = '#e0a43a';
+  for (const r of remotes.values()) {
+    if (!r.group.visible) continue;
+    mapG.beginPath();
+    mapG.arc((r.group.position.x - me.pos.x) * scale, (r.group.position.z - me.pos.z) * scale, 4, 0, Math.PI * 2);
+    mapG.fill();
+  }
+  mapG.fillStyle = '#c9d4de'; mapG.font = 'bold 12px system-ui'; mapG.textAlign = 'center';
+  mapG.fillText('N', 0, -R + 16);
+  mapG.restore();
+  mapG.fillStyle = '#fff'; // soi-même : flèche fixe vers le haut
+  mapG.beginPath(); mapG.moveTo(R, R - 7); mapG.lineTo(R + 5, R + 5); mapG.lineTo(R - 5, R + 5); mapG.fill();
+}
 
 // --- Capture d'écran (mode dev) : lue juste après le rendu, même frame ---
 let captureResolve: ((s: string) => void) | null = null;
@@ -260,11 +358,13 @@ renderer.setAnimationLoop(() => {
     camera.position.set(0, 3, 0);
     camera.rotation.set(-0.15, menuYaw, 0);
   }
-  updateRemotes();
+  updateRemotes(dt);
+  updatePreview(dt);
+  drawMap();
   world?.update(dt, now / 1000, me.pos);
   netAcc += dt;
   if (room && netAcc >= 0.05) { netAcc = 0; net.sendPos(me.pos.x, me.pos.y, me.pos.z, me.yaw); }
-  hud.textContent = room ? `Partie ${room.code} · ${remotes.size + 1} joueur${remotes.size ? 's' : ''}${net.open ? '' : ' · reconnexion…'}` : '';
+  hud.textContent = room ? `${myChar().name} (${ABILITIES[myChar().ability].label}) · Partie ${room.code} · ${remotes.size + 1} joueur${remotes.size ? 's' : ''}${net.open ? '' : ' · reconnexion…'}` : '';
   $('room-bar').hidden = !room || locked();
   renderer.render(scene, camera);
   if (captureResolve) { captureResolve(grab()); captureResolve = null; }
@@ -272,7 +372,8 @@ renderer.setAnimationLoop(() => {
 
 // --- Démarrage ---
 (async () => {
-  try { nameInput.value = localStorage.getItem(NAME_KEY) || ''; } catch {}
+  try { nameInput.value = localStorage.getItem(NAME_KEY) || ''; look = cleanLook(JSON.parse(localStorage.getItem(LOOK_KEY) || 'null')); } catch {}
+  renderPicker();
   const urlRoom = new URLSearchParams(location.search).get('room');
   if (urlRoom) codeInput.value = urlRoom.toUpperCase().slice(0, 5);
 

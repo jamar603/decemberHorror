@@ -1,4 +1,5 @@
 import type * as THREE from 'three';
+import type { Ability, CharacterDef } from '../../shared/characters';
 
 // Fourni par le shell (stable) au module monde (hot-swappable).
 export interface WorldCtx {
@@ -7,6 +8,10 @@ export interface WorldCtx {
   renderer: THREE.WebGLRenderer;
   /** Graine de la partie (dérivée du code) : chaque partie a sa propre carte. */
   seed: number;
+  /** Personnage du joueur local (change seulement depuis le menu). */
+  character: CharacterDef;
+  /** ex. hasAbility('lockpick') pour une serrure, 'crowbar' pour forcer, 'hack' pour un terminal / l'électricité. */
+  hasAbility(a: Ability): boolean;
 }
 
 export interface World {

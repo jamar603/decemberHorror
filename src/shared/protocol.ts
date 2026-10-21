@@ -2,6 +2,8 @@
 // Binaire pour le temps réel (positions), JSON pour le reste (parties, dev, versions).
 // Rester rétro-compatible : d'anciens clients restent connectés pendant un déploiement.
 
+import type { Look } from './characters';
+
 export const TICK_HZ = 20;
 export const MAX_PLAYERS = 200; // total serveur
 export const ROOM_MAX = 12; // par partie
@@ -37,7 +39,7 @@ export type DevTaskOp = 'delete' | 'clear';
 export interface RoomInfo { code: string; players: number; max: number }
 
 export type ClientMsg =
-  | { t: 'hello'; name: string; dev?: string; keys?: string[] }
+  | { t: 'hello'; name: string; dev?: string; keys?: string[]; look?: Look } // look : [personnage, teinte de peau]
   // recreate : après un redémarrage serveur, le client recrée sa partie avec le même code
   | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean }
   | { t: 'create' }
@@ -47,9 +49,9 @@ export type ClientMsg =
 
 export type ServerMsg =
   | { t: 'welcome'; id: number; version: VersionInfo | null; dev: boolean; owned?: string[] }
-  | { t: 'joined'; room: RoomInfo; players: { id: number; name: string }[] }
+  | { t: 'joined'; room: RoomInfo; players: { id: number; name: string; look?: Look }[] }
   | { t: 'roomError'; msg: string }
-  | { t: 'join'; id: number; name: string }
+  | { t: 'join'; id: number; name: string; look?: Look }
   | { t: 'leave'; id: number }
   | { t: 'version'; version: VersionInfo }
   | { t: 'devStatus'; state: 'building' | 'deploying' | 'done' | 'failed'; msg: string }

@@ -5,6 +5,7 @@ import uWS from 'uWebSockets.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
+import { cleanLook, DEFAULT_LOOK, type Look } from '../src/shared/characters';
 import {
   B_POS, B_SNAP, POS_BYTES, SNAP_ENTRY, TICK_HZ, MAX_PLAYERS, ROOM_MAX, CODE_LEN,
   type ClientMsg, type ServerMsg, type VersionInfo, type BridgeMsg, type ToBridgeMsg, type DevBridge, type RoomInfo,
@@ -43,7 +44,7 @@ loadVersion();
 
 interface Player {
   kind: 'player';
-  id: number; name: string; dev: string | null; hello: boolean; room: Room | null;
+  id: number; name: string; look: Look; dev: string | null; hello: boolean; room: Room | null;
   x: number; y: number; z: number; yaw: number; dirty: boolean; lastCreate: number;
   owned: Set<string>;
 }
@@ -109,14 +110,14 @@ function enterRoom(ws: WS, p: Player, r: Room, pos?: number[]) {
   if (r.members.size >= ROOM_MAX) return send(ws, { t: 'roomError', msg: 'Partie pleine' });
   leaveRoom(ws, p);
   if (pos && pos.length === 4 && pos.every(Number.isFinite)) [p.x, p.y, p.z, p.yaw] = pos;
-  const list = [...r.members].map((w) => w.getUserData() as Player).map((o) => ({ id: o.id, name: o.name }));
+  const list = [...r.members].map((w) => w.getUserData() as Player).map((o) => ({ id: o.id, name: o.name, look: o.look }));
   r.members.add(ws);
   p.room = r;
   p.dirty = true;
   ws.subscribe(`r:${r.code}`);
   send(ws, { t: 'joined', room: roomInfo(r), players: list });
   const full = snapshot(r, true); if (full) ws.send(full, true);
-  toRoom(r, { t: 'join', id: p.id, name: p.name });
+  toRoom(r, { t: 'join', id: p.id, name: p.name, look: p.look });
 }
 
 function snapshot(r: Room, all: boolean): ArrayBuffer | null {
@@ -157,9 +158,10 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
 
   if (m.t === 'hello') {
     // re-hello autorisé hors partie : le joueur change son pseudo dans le menu
-    if (p.hello) { if (!p.room) p.name = clean(m.name, 16, 'Inconnu'); return; }
+    if (p.hello) { if (!p.room) { p.name = clean(m.name, 16, 'Inconnu'); p.look = cleanLook(m.look); } return; }
     p.hello = true;
     p.name = clean(m.name, 16, 'Inconnu');
+    p.look = cleanLook(m.look);
     p.dev = devName(m.dev);
     ws.subscribe('all');
     if (p.dev) ws.subscribe('dev');
@@ -257,7 +259,7 @@ const app = uWS.App()
       const isBridge = req.getQuery('bridge') === '1';
       const data: Data = isBridge
         ? { kind: 'bridge', authed: false, id: randomBytes(6).toString('hex'), dev: '', host: '', tasks: [], owner: '' }
-        : { kind: 'player', id: 0, name: '', dev: null, hello: false, room: null, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0, owned: new Set() };
+        : { kind: 'player', id: 0, name: '', look: [...DEFAULT_LOOK], dev: null, hello: false, room: null, x: 0, y: 0, z: 0, yaw: 0, dirty: false, lastCreate: 0, owned: new Set() };
       res.upgrade(data, req.getHeader('sec-websocket-key'), req.getHeader('sec-websocket-protocol'),
         req.getHeader('sec-websocket-extensions'), ctx);
     },
