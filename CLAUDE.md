@@ -47,7 +47,7 @@ Perf : pixel ratio ≤ 1.5 ; géométrie répétée => `mergeGeometries` ou `Ins
 
 ## Commandes
 
-- `npm run dev` — serveur (tsx watch) + Vite HMR → http://localhost:5173/?dev=dev (Node ≥ 22)
+- `npm run dev` — serveur (tsx watch) + Vite HMR → http://localhost:5173/?dev=dev (serveur lancé sous Node 22 via npx si ton Node local est trop récent pour uWS v20.51)
 - `npm run typecheck`, `npm run build`
 - `npm run bridge` — relie le jeu à Claude sur ta machine (config `.dev-bridge.json`)
 

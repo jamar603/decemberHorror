@@ -5,7 +5,7 @@ capture dans le jeu → prompt → Claude Code d'un dev → push → mise à jou
 
 **Jouer :** https://december.147-93-90-144.sslip.io
 
-## Démarrer en dev (Node ≥ 22)
+## Démarrer en dev (Node 22 conseillé)
 
 ```bash
 npm install

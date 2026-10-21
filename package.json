@@ -10,11 +10,11 @@
     "bridge": "node tools/dev-bridge.mjs"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=20"
   },
   "dependencies": {
     "three": "^0.170.0",
-    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.69.0"
+    "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.51.0"
   },
   "devDependencies": {
     "@types/node": "^20.17.10",
