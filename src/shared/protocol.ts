@@ -33,8 +33,10 @@ export interface DevTask {
   ended?: number;
 }
 // owner : sha256 de la clé secrète du bridge. Seuls les devs qui présentent cette clé peuvent utiliser ce Claude
-export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; owner?: string }
-export type DevTaskOp = 'delete' | 'clear';
+export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; owner?: string; session?: DevSession }
+export type DevTaskOp = 'delete' | 'clear' | 'reset'; // reset : nouvelle conversation Claude
+// conversation Claude du bridge (reprise d'une tâche à l'autre) : taille du contexte / limite avant reset auto
+export interface DevSession { ctx: number; max: number; turns: number; active: boolean }
 
 export interface RoomInfo { code: string; players: number; max: number }
 
@@ -44,7 +46,7 @@ export type ClientMsg =
   | { t: 'join'; code: string; pos?: [number, number, number, number]; recreate?: boolean }
   | { t: 'create' }
   | { t: 'leaveRoom' }
-  | { t: 'devPrompt'; bridge: string; prompt: string; image: string }
+  | { t: 'devPrompt'; bridge: string; prompt: string; image: string; fresh?: boolean }
   | { t: 'devTask'; bridge: string; op: DevTaskOp; id?: string };
 
 export type ServerMsg =
@@ -62,9 +64,9 @@ export type ServerMsg =
 export type BridgeMsg =
   | { t: 'bridgeHello'; token: string; host: string; key?: string }
   | { t: 'delivered'; reqId: string; ok: boolean; msg: string }
-  | { t: 'tasks'; tasks: DevTask[] };
+  | { t: 'tasks'; tasks: DevTask[]; session?: DevSession };
 export type ToBridgeMsg =
-  | { t: 'prompt'; reqId: string; from: string; prompt: string; image: string }
+  | { t: 'prompt'; reqId: string; from: string; prompt: string; image: string; fresh?: boolean }
   | { t: 'taskOp'; from: string; op: DevTaskOp; id?: string }
   // tableau partagé : les tâches de TOUS les bridges, pour que chaque Claude voie ce que font les autres
   | { t: 'board'; bridges: DevBridge[] };

@@ -8,3 +8,4 @@ out/
 .assets-tmp/
 *.log
 .impeccable/hook.cache.json
+.dev-bridge-session.json

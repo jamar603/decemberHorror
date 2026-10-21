@@ -150,7 +150,7 @@ export class Dev {
     m.innerHTML = `<div class="box">
       <img alt="capture" />
       <textarea placeholder="Décris la modification à faire…"></textarea>
-      <div class="row"><select></select><button class="cancel">Annuler</button><button class="send">Envoyer à Claude</button></div>
+      <div class="row"><select></select><label class="fresh"><input type="checkbox" /> Nouvelle conversation</label><button class="cancel">Annuler</button><button class="send">Envoyer à Claude</button></div>
       <div class="hint">Ctrl+Entrée pour envoyer · Échap pour annuler · une tâche à la fois par bridge, les suivantes attendent · F10 = tâches</div>
     </div>`;
     (m.querySelector('img') as HTMLImageElement).src = img;
@@ -163,7 +163,7 @@ export class Dev {
       const prompt = ta.value.trim();
       if (!prompt || !sel.value) { ta.focus(); return; }
       try { localStorage.setItem('december.devTarget', sel.value); } catch {}
-      this.net.send({ t: 'devPrompt', bridge: sel.value, prompt, image: img });
+      this.net.send({ t: 'devPrompt', bridge: sel.value, prompt, image: img, fresh: m.querySelector<HTMLInputElement>('.fresh input')!.checked });
       toast('Envoi à Claude…');
       close();
     };
@@ -224,8 +224,10 @@ export class Dev {
     const order = { running: 0, pending: 1, done: 2, failed: 2 };
     const blocks = this.bridges.map((b) => {
       const ts = [...b.tasks].sort((x, y) => order[x.state] - order[y.state] || (order[x.state] === 2 ? (y.ended ?? 0) - (x.ended ?? 0) : 0));
+      const se = b.session;
+      const conv = se ? `<div class="conv">Conversation : ${se.active ? `${Math.round(se.ctx / 1000)}k / ${Math.round(se.max / 1000)}k tokens · ${se.turns} tâche${se.turns > 1 ? 's' : ''}` : 'vide (la prochaine tâche repart de zéro)'}${se.active && this.owned.has(b.owner ?? '') ? ` <button class="reset" data-bridge="${esc(b.id)}">Nouvelle conversation</button>` : ''}</div>` : '';
       const clear = ts.some((t) => order[t.state] === 2) ? `<button class="clear" data-bridge="${esc(b.id)}">Vider terminées</button>` : '';
-      return `<h3>${esc(b.dev)} <small>@ ${esc(b.host)}</small>${clear}</h3>
+      return `<h3>${esc(b.dev)} <small>@ ${esc(b.host)}</small>${clear}</h3>${conv}
         ${ts.length ? `<ul>${ts.map((t) => row(b, t)).join('')}</ul>` : '<p class="empty">Aucune tâche · F9 pour en ajouter une</p>'}`;
     }).join('');
     p.innerHTML = `<header><b>Tâches Claude (tous les devs)</b><button class="x" title="Fermer (F10)">✕</button></header>
@@ -236,6 +238,8 @@ export class Dev {
   private panelClick(e: MouseEvent) {
     const el = e.target as HTMLElement;
     if (el.closest('.x')) return this.togglePanel();
+    const reset = el.closest<HTMLElement>('.reset');
+    if (reset) return this.op(reset.dataset.bridge!, 'reset');
     const clear = el.closest<HTMLElement>('.clear');
     if (clear) return this.op(clear.dataset.bridge!, 'clear');
     const del = el.closest<HTMLElement>('[data-del]');

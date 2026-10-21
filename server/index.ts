@@ -70,7 +70,7 @@ const toRoom = (r: Room, m: ServerMsg) => app.publish(`r:${r.code}`, JSON.string
 const broadcastAll = (m: ServerMsg) => app.publish('all', JSON.stringify(m), false);
 const bridgeList = (): DevBridge[] => [...bridges.values()].map((b) => {
   const d = b.getUserData() as Bridge;
-  return { id: d.id, dev: d.dev, host: d.host, tasks: d.tasks, owner: d.owner };
+  return { id: d.id, dev: d.dev, host: d.host, tasks: d.tasks, owner: d.owner, session: d.session };
 });
 // Les devs (jeu) et les bridges (sessions Claude) voient le même tableau de tâches
 function boardChanged() {
@@ -202,10 +202,10 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
         return send(ws, { t: 'devAck', ok: false, msg: 'Image invalide' });
       const reqId = randomBytes(8).toString('hex');
       pending.set(reqId, { ws, t: Date.now() });
-      return send(b, { t: 'prompt', reqId, from: p.dev, prompt, image });
+      return send(b, { t: 'prompt', reqId, from: p.dev, prompt, image, fresh: m.fresh === true });
     }
     case 'devTask': {
-      if (!p.dev || !['delete', 'clear'].includes(m.op)) return;
+      if (!p.dev || !['delete', 'clear', 'reset'].includes(m.op)) return;
       const b = bridges.get(String(m.bridge));
       if (!b) return send(ws, { t: 'devAck', ok: false, msg: 'Bridge introuvable (déconnecté ?)' });
       if (!canUse(b, p)) return send(ws, { t: 'devAck', ok: false, msg: 'Ce Claude est privé : clé du bridge manquante, accès refusé' });
@@ -229,6 +229,10 @@ function onBridgeMsg(ws: WS, b: Bridge, raw: ArrayBuffer) {
   }
   if (m.t === 'tasks') {
     b.tasks = (Array.isArray(m.tasks) ? m.tasks : []).slice(0, 80).map((t) => ({ ...t, prompt: String(t.prompt ?? '').slice(0, 600), msg: String(t.msg ?? '').slice(0, 600) }));
+    if (m.session && typeof m.session === 'object') {
+      const s = m.session;
+      b.session = { ctx: Number(s.ctx) || 0, max: Number(s.max) || 0, turns: Number(s.turns) || 0, active: !!s.active };
+    }
     boardChanged();
   } else if (m.t === 'delivered') {
     const req = pending.get(m.reqId);

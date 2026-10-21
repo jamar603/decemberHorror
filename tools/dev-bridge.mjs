@@ -29,14 +29,16 @@ const QUEUE_FILE = join(REPO, '.dev-bridge-queue.json');
 const SHOTS = join(REPO, '.devshots');
 const BOARD = join(SHOTS, 'board.md');
 const KEEP_DONE = 20; // historique des tâches terminées
+const SESSION_FILE = join(REPO, '.dev-bridge-session.json');
+const MAX_CTX = Number(cfg.maxContextTokens) || 150_000; // au-delà, nouvelle conversation automatique
 const TIMEOUT_MS = (Number(cfg.timeoutMin) || 30) * 60_000;
 
 // Config Claude prédéfinie (surchargeable dans .dev-bridge.json : model, effort, claudeArgs) :
-// - headless (-p), sortie JSON (résultat + erreur), pas de session sauvegardée
+// - headless (-p), sortie stream-json (événements + résultat), conversation reprise d'une tâche à l'autre (--resume)
 // - permissions contournées : la tâche doit pouvoir tester, commit et push sans personne devant
 // - seuls les réglages du projet (CLAUDE.md, .claude/) : pas de plugins, hooks ni MCP perso => moins de tokens, même comportement chez tous les devs
 const CLAUDE_ARGS = cfg.claudeArgs || [
-  '-p', '--output-format', 'json', '--no-session-persistence',
+  '-p', '--output-format', 'stream-json', '--verbose',
   '--model', cfg.model || 'opus', '--effort', cfg.effort || 'medium',
   '--permission-mode', 'bypassPermissions',
   '--setting-sources', 'project,local', '--strict-mcp-config',
@@ -47,14 +49,29 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-function buildPrompt(t) {
+function buildPrompt(t, resumed) {
   return `[Demande envoyée depuis le jeu (mode dev) par ${t.from}]\n${t.prompt}\n\n` +
+    (resumed ? `Cette conversation continue : tu as le contexte des demandes précédentes, mais le code a pu changer (relis avant de modifier).\n` : '') +
     `Capture d'écran du jeu au moment de la demande : ${t.shot} (lis-la avec l'outil Read).\n` +
     `AVANT de coder, lis .devshots/board.md : ce que font les autres devs/Claude en ce moment et ce qu'ils viennent de finir. ` +
     `Évite de toucher aux mêmes fichiers qu'une tâche en cours ; relis-le avant de pousser.\n` +
     `Applique la modification, vérifie en local (npm run typecheck && npm run build), puis git pull --rebase origin main, commit et push sur main pour déployer (voir CLAUDE.md). ` +
     `Pas de branche. Ne pousse que tes propres modifications.\n` +
     `Termine par UNE phrase courte résumant ce que tu as changé (elle s'affiche dans le tableau des tâches de tous les devs).`;
+}
+
+// --- Conversation Claude (reprise d'une tâche à l'autre) ---
+let session = { id: '', ctx: 0, turns: 0 };
+try { session = { ...session, ...JSON.parse(readFileSync(SESSION_FILE, 'utf8')) }; } catch {}
+const saveSession = () => { try { writeFileSync(SESSION_FILE, JSON.stringify(session)); } catch {} };
+const publicSession = () => ({ ctx: session.ctx, max: MAX_CTX, turns: session.turns, active: !!session.id });
+function resetSession(why) {
+  if (current) current.t.noSave = true; // la tâche en cours ne doit pas ressusciter l'ancienne conversation
+  if (!session.id && !session.ctx) return;
+  session = { id: '', ctx: 0, turns: 0 };
+  saveSession();
+  console.log(`↺ nouvelle conversation (${why})`);
+  changed();
 }
 
 // --- File de tâches ---
@@ -73,8 +90,8 @@ function changed() {
   const drop = new Set(done.slice(KEEP_DONE));
   if (drop.size) tasks = tasks.filter((t) => !drop.has(t));
   try { writeFileSync(QUEUE_FILE, JSON.stringify(tasks)); } catch (e) { console.error('file de tâches non sauvée :', e.message); }
-  const cur = JSON.stringify(publicTasks());
-  if (cur !== lastSent && ws?.readyState === WebSocket.OPEN) { lastSent = cur; ws.send(JSON.stringify({ t: 'tasks', tasks: JSON.parse(cur) })); }
+  const cur = JSON.stringify({ tasks: publicTasks(), session: publicSession() });
+  if (cur !== lastSent && ws?.readyState === WebSocket.OPEN) { lastSent = cur; ws.send(JSON.stringify({ t: 'tasks', ...JSON.parse(cur) })); }
 }
 const short = (s) => s.replace(/\s+/g, ' ').slice(0, 60);
 
@@ -92,28 +109,64 @@ function pump() {
   if (current) return;
   const t = tasks.find((x) => x.state === 'pending');
   if (!t) return;
+  if (t.fresh) resetSession('demandée avec la tâche');
+  else if (session.ctx >= MAX_CTX) resetSession(`contexte ${Math.round(session.ctx / 1000)}k tokens ≥ limite`);
   t.state = 'running';
   t.started = Date.now();
   t.msg = '';
   console.log(`▶ [${t.id}] ${t.from} : ${short(t.prompt)}`);
+  run(t, !!session.id && !cfg.claudeArgs);
+  changed();
+}
+
+// événement stream-json : on garde le résultat final et la taille réelle du contexte (usage du dernier message)
+function onEvent(t, st, ev) {
+  if (ev.type === 'assistant' && ev.message?.usage) {
+    const u = ev.message.usage;
+    st.ctx = (u.input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.output_tokens || 0);
+  } else if (ev.type === 'result') st.result = ev;
+}
+
+function run(t, resume) {
+  const args = resume ? [...CLAUDE_ARGS, '--resume', session.id] : CLAUDE_ARGS;
   // prompt par stdin : pas de souci de guillemets/longueur sous Windows ; shell => trouve claude.cmd / claude.exe
-  const proc = spawn('claude', CLAUDE_ARGS, { cwd: REPO, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' });
+  const proc = spawn('claude', args, { cwd: REPO, stdio: ['pipe', 'pipe', 'pipe'], shell: process.platform === 'win32' });
   current = { t, proc };
-  let out = '', err = '';
-  proc.stdout.on('data', (d) => (out += d));
+  let out = '', err = '', buf = '';
+  const st = { result: null, ctx: 0 };
+  proc.stdout.on('data', (d) => {
+    out += d; buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
+      if (!line) continue;
+      try { onEvent(t, st, JSON.parse(line)); } catch {}
+    }
+  });
   proc.stderr.on('data', (d) => (err += d));
   const timer = setTimeout(() => { err = `délai dépassé (${TIMEOUT_MS / 60_000} min)`; proc.kill(); }, TIMEOUT_MS);
   proc.on('error', (e) => { clearTimeout(timer); if (current?.t === t) finish(t, false, `claude introuvable : ${e.message}`); });
   proc.on('close', (code) => {
     clearTimeout(timer);
     if (current?.t !== t) return;
-    let r = null;
-    try { r = JSON.parse(out); } catch {}
-    if (r && !r.is_error && code === 0) finish(t, true, r.result || 'terminée');
-    else finish(t, false, r?.result || err.trim().split('\n').pop() || `claude code ${code}`);
+    let r = st.result;
+    if (!r) try { r = JSON.parse(out); } catch {} // claudeArgs perso en sortie json simple
+    const ok = r && !r.is_error && code === 0;
+    if (ok) {
+      if (r.session_id && !cfg.claudeArgs && !t.noSave) { session = { id: r.session_id, ctx: st.ctx || session.ctx, turns: session.turns + 1 }; saveSession(); }
+      return finish(t, true, r.result || 'terminée');
+    }
+    // conversation reprise introuvable/corrompue : on repart de zéro, une seule fois
+    if (resume && !t.retried && (!r || /no conversation|session/i.test(`${r.result || ''}${err}`))) {
+      t.retried = true;
+      resetSession('conversation introuvable');
+      t.noSave = false;
+      console.log(`↻ [${t.id}] relance sans reprise`);
+      return run(t, false);
+    }
+    finish(t, false, r?.result || err.trim().split('\n').pop() || `claude code ${code}`);
   });
-  proc.stdin.end(buildPrompt(t));
-  changed();
+  proc.stdin.end(buildPrompt(t, resume));
 }
 
 function enqueue(m) {
@@ -122,7 +175,7 @@ function enqueue(m) {
   const id = randomBytes(4).toString('hex');
   const shot = `.devshots/${new Date().toISOString().replace(/[:.]/g, '-')}-${id}.${ext}`;
   writeFileSync(join(REPO, shot), Buffer.from(m.image.split(',')[1], 'base64'));
-  tasks.push({ id, from: m.from, prompt: m.prompt, shot, state: 'pending', at: Date.now() });
+  tasks.push({ id, from: m.from, prompt: m.prompt, shot, state: 'pending', at: Date.now(), fresh: !!m.fresh });
   const pos = tasks.filter((t) => t.state === 'pending').length - (current ? 0 : 1);
   reply(m.reqId, true, pos > 0 ? `Ajouté à la file (${pos} avant) · F10 pour voir` : 'Claude démarre · F10 pour voir');
   changed();
@@ -132,6 +185,7 @@ function enqueue(m) {
 function applyOp(m) {
   if (m.op === 'clear') tasks = tasks.filter((x) => x.state === 'pending' || x.state === 'running');
   else if (m.op === 'delete') tasks = tasks.filter((x) => x.id !== m.id || x.state === 'running');
+  else if (m.op === 'reset') resetSession(`demandée par ${m.from}`);
   else return;
   console.log(`~ ${m.from} : ${m.op} ${m.id ?? ''}`);
   changed();
