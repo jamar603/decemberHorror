@@ -24,6 +24,7 @@ export interface VersionInfo {
 /** Tâche envoyée à Claude depuis le jeu. Chaque bridge (un par dev) exécute sa file une tâche à la fois. */
 export type DevPhase = 'read' | 'edit' | 'check' | 'push';
 export interface DevStep { at: number; kind: 'read' | 'edit' | 'run' | 'check' | 'git' | 'note'; text: string }
+export interface DevTodo { id: string; text: string; status: 'todo' | 'doing' | 'done'; by: string } // by : 'claude' ou le dev qui l'a ajoutée
 export interface DevTask {
   id: string;
   from: string; // dev qui a envoyé le prompt
@@ -40,6 +41,7 @@ export interface DevTask {
   files?: string[]; // fichiers modifiés
   commit?: string; // dernier commit à la fin de la tâche (« abc1234 message »)
   cost?: number; // USD
+  todos?: DevTodo[]; // plan de la tâche : écrit par Claude, éditable par le dev
 }
 // owner : sha256 de la clé secrète du bridge. Seuls les devs qui présentent cette clé peuvent utiliser ce Claude
 export interface DevBridge { id: string; dev: string; host: string; tasks: DevTask[]; owner?: string; session?: DevSession }
@@ -56,7 +58,8 @@ export type ClientMsg =
   | { t: 'create' }
   | { t: 'leaveRoom' }
   | { t: 'devPrompt'; bridge: string; prompt: string; image: string; fresh?: boolean }
-  | { t: 'devTask'; bridge: string; op: DevTaskOp; id?: string };
+  | { t: 'devTask'; bridge: string; op: DevTaskOp; id?: string }
+  | { t: 'devTodo'; bridge: string; task: string; op: 'add' | 'remove'; id?: string; text?: string };
 
 export type ServerMsg =
   | { t: 'welcome'; id: number; version: VersionInfo | null; dev: boolean; owned?: string[] }
@@ -77,5 +80,6 @@ export type BridgeMsg =
 export type ToBridgeMsg =
   | { t: 'prompt'; reqId: string; from: string; prompt: string; image: string; fresh?: boolean }
   | { t: 'taskOp'; from: string; op: DevTaskOp; id?: string }
+  | { t: 'todoOp'; from: string; task: string; op: 'add' | 'remove'; id?: string; text?: string }
   // tableau partagé : les tâches de TOUS les bridges, pour que chaque Claude voie ce que font les autres
   | { t: 'board'; bridges: DevBridge[] };

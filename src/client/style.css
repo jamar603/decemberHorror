@@ -89,3 +89,16 @@ button.primary { background: var(--accent); border-color: var(--accent); color: 
 #dev-tasks .log ol li { overflow-wrap: anywhere; }
 #dev-tasks .log ol li.note { color: #8a8a8a; font-style: italic; }
 #dev-tasks .log time { color: #555; margin-right: 4px; }
+#dev-tasks .plan { margin-top: 8px; cursor: default; }
+#dev-tasks .pbar { height: 3px; background: #222; border-radius: 2px; overflow: hidden; margin-bottom: 6px; }
+#dev-tasks .pbar i { display: block; height: 100%; background: var(--dev); transition: width .3s; }
+#dev-tasks .plan ul { gap: 3px; }
+#dev-tasks .td { display: flex; align-items: flex-start; gap: 6px; font-size: 12px; }
+#dev-tasks .td .ck { flex: none; width: 12px; color: var(--dim); }
+#dev-tasks .td.doing .ck, #dev-tasks .td.doing .tx { color: var(--dev); }
+#dev-tasks .td.done .ck { color: #5fb36e; } #dev-tasks .td.done .tx { color: var(--dim); text-decoration: line-through; }
+#dev-tasks .td .tx { flex: 1; overflow-wrap: anywhere; }
+#dev-tasks .td small { color: #b09060; font-size: 10px; }
+#dev-tasks .td button { padding: 0 5px; }
+#dev-tasks .todo-add { display: flex; gap: 4px; margin-top: 6px; }
+#dev-tasks .todo-add input { flex: 1; min-width: 0; font: inherit; font-size: 12px; background: #0d0d0d; color: var(--fg); border: 1px solid #333; padding: 4px 6px; border-radius: 3px; }

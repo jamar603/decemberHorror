@@ -204,6 +204,13 @@ function onPlayerMsg(ws: WS, p: Player, raw: ArrayBuffer, isBinary: boolean) {
       pending.set(reqId, { ws, t: Date.now() });
       return send(b, { t: 'prompt', reqId, from: p.dev, prompt, image, fresh: m.fresh === true });
     }
+    case 'devTodo': {
+      if (!p.dev || !['add', 'remove'].includes(m.op)) return;
+      const b = bridges.get(String(m.bridge));
+      if (!b) return send(ws, { t: 'devAck', ok: false, msg: 'Bridge introuvable (déconnecté ?)' });
+      if (!canUse(b, p)) return send(ws, { t: 'devAck', ok: false, msg: 'Ce Claude est privé : clé du bridge manquante, accès refusé' });
+      return send(b, { t: 'todoOp', from: p.dev, task: String(m.task).slice(0, 20), op: m.op, id: m.id === undefined ? undefined : String(m.id).slice(0, 20), text: m.text === undefined ? undefined : String(m.text).slice(0, 160) });
+    }
     case 'devTask': {
       if (!p.dev || !['delete', 'clear', 'reset'].includes(m.op)) return;
       const b = bridges.get(String(m.bridge));
@@ -231,6 +238,7 @@ function onBridgeMsg(ws: WS, b: Bridge, raw: ArrayBuffer) {
     b.tasks = (Array.isArray(m.tasks) ? m.tasks : []).slice(0, 80).map((t) => ({ ...t, prompt: String(t.prompt ?? '').slice(0, 600), msg: String(t.msg ?? '').slice(0, 600),
       activity: t.activity ? String(t.activity).slice(0, 160) : undefined,
       commit: t.commit ? String(t.commit).slice(0, 200) : undefined,
+      todos: Array.isArray(t.todos) ? t.todos.slice(0, 40).map((x) => ({ id: String(x.id).slice(0, 20), text: String(x.text ?? '').slice(0, 160), status: x.status, by: String(x.by ?? '').slice(0, 40) })) : undefined,
       files: Array.isArray(t.files) ? t.files.slice(0, 40).map((f) => String(f).slice(0, 160)) : undefined,
       steps: Array.isArray(t.steps) ? t.steps.slice(-80).map((s) => ({ at: Number(s.at) || 0, kind: s.kind, text: String(s.text ?? '').slice(0, 160) })) : undefined }));
     if (m.session && typeof m.session === 'object') {

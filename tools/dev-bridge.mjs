@@ -55,6 +55,10 @@ function buildPrompt(t, resumed) {
     `Capture d'écran du jeu au moment de la demande : ${t.shot} (lis-la avec l'outil Read).\n` +
     `AVANT de coder, lis .devshots/board.md : ce que font les autres devs/Claude en ce moment et ce qu'ils viennent de finir. ` +
     `Évite de toucher aux mêmes fichiers qu'une tâche en cours ; relis-le avant de pousser.\n` +
+    `PLAN (obligatoire) : AVANT de coder, écris ton plan dans ${t.todoFile} au format {"items":[{"id":"1","text":"étape courte","status":"todo"}]} ` +
+    `(3 à 8 étapes, la dernière = vérification + push). Si ce fichier existe déjà, il contient des étapes ajoutées par le dev : garde-les et complète. ` +
+    `Passe chaque étape à "doing" puis "done" au fur et à mesure (Edit sur ce fichier). Relis ce fichier avant chaque nouvelle étape : le dev peut y ajouter des étapes (fais-les) ou en retirer (ne les recrée pas). ` +
+    `Si l'écriture échoue parce que le fichier a changé, relis-le et réessaie.\n` +
     `Applique la modification, vérifie en local (npm run typecheck && npm run build), puis git pull --rebase origin main, commit et push sur main pour déployer (voir CLAUDE.md). ` +
     `Pas de branche. Ne pousse que tes propres modifications.\n` +
     `Termine par UNE phrase courte résumant ce que tu as changé (elle s'affiche dans le tableau des tâches de tous les devs).`;
@@ -84,7 +88,7 @@ let current = null; // { t, proc }
 let lastSent = '';
 let ws;
 
-const publicTasks = () => tasks.map(({ id, from, prompt, state, msg, at, started, ended, phase, activity, steps, files, commit, cost }) => ({ id, from, prompt: prompt.slice(0, 600), state, msg, at, started, ended, phase, activity, steps, files, commit, cost }));
+const publicTasks = () => tasks.map(({ id, from, prompt, state, msg, at, started, ended, phase, activity, steps, files, commit, cost, todos }) => ({ id, from, prompt: prompt.slice(0, 600), state, msg, at, started, ended, phase, activity, steps, files, commit, cost, todos: todos?.filter((x) => !x.removed).map(({ id, text, status, by }) => ({ id, text, status, by })) }));
 // les événements Claude arrivent en rafale : on regroupe les envois
 let touchTimer;
 const touch = () => { if (!touchTimer) touchTimer = setTimeout(() => { touchTimer = null; changed(); }, 400); };
@@ -118,6 +122,8 @@ function pump() {
   t.state = 'running';
   t.started = Date.now();
   t.msg = '';
+  t.todoFile ||= `.devshots/todo-${t.id}.json`; // tâches en file créées avant l'ajout du plan
+  if (t.todos?.length) writeTodoFile(t);
   t.steps = []; t.files = []; t.phase = undefined; t.activity = 'Démarrage…'; t.commit = undefined; t.cost = undefined;
   console.log(`▶ [${t.id}] ${t.from} : ${short(t.prompt)}`);
   run(t, !!session.id && !cfg.claudeArgs);
@@ -147,6 +153,46 @@ function describeTool(name, input = {}) {
     }
     default: return null;
   }
+}
+
+// --- Plan (todo) de la tâche : fichier .devshots/todo-<id>.json écrit par Claude, fusionné ici avec les ajouts/retraits du dev ---
+function readTodoFile(t) {
+  let d;
+  try { d = JSON.parse(readFileSync(join(REPO, t.todoFile), 'utf8')); } catch { return; }
+  t.todos ||= [];
+  let ch = false;
+  for (const it of (Array.isArray(d?.items) ? d.items : []).slice(0, 40)) {
+    const id = String(it?.id ?? '').slice(0, 20), text = String(it?.text ?? '').slice(0, 160);
+    const status = ['todo', 'doing', 'done'].includes(it?.status) ? it.status : 'todo';
+    if (!id || !text) continue;
+    const cur = t.todos.find((x) => x.id === id);
+    if (!cur) { t.todos.push({ id, text, status, by: 'claude' }); ch = true; }
+    else if (!cur.removed && cur.status !== status) { cur.status = status; ch = true; }
+  }
+  if (ch) touch();
+}
+function writeTodoFile(t) {
+  try {
+    mkdirSync(SHOTS, { recursive: true });
+    writeFileSync(join(REPO, t.todoFile), JSON.stringify({ items: (t.todos || []).filter((x) => !x.removed).map(({ id, text, status, by }) => ({ id, text, status, by })) }, null, 2));
+  } catch {}
+}
+function todoOp(m) {
+  const t = tasks.find((x) => x.id === m.task);
+  if (!t || (t.state !== 'pending' && t.state !== 'running')) return;
+  t.todos ||= [];
+  if (m.op === 'add') {
+    const text = String(m.text || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+    if (!text || t.todos.filter((x) => !x.removed).length >= 40) return;
+    t.todos.push({ id: `u${randomBytes(3).toString('hex')}`, text, status: 'todo', by: m.from });
+  } else if (m.op === 'remove') {
+    const it = t.todos.find((x) => x.id === m.id);
+    if (!it || it.status !== 'todo') return; // ni en cours ni terminée
+    it.removed = true;
+  } else return;
+  console.log(`~ ${m.from} : plan ${m.op} sur [${t.id}]`);
+  writeTodoFile(t);
+  changed();
 }
 
 // événement stream-json : journal d'activité, résultat final et taille réelle du contexte (usage du dernier message)
@@ -186,10 +232,12 @@ function run(t, resume) {
     }
   });
   proc.stderr.on('data', (d) => (err += d));
+  const poll = setInterval(() => readTodoFile(t), 1000);
   const timer = setTimeout(() => { err = `délai dépassé (${TIMEOUT_MS / 60_000} min)`; proc.kill(); }, TIMEOUT_MS);
-  proc.on('error', (e) => { clearTimeout(timer); if (current?.t === t) finish(t, false, `claude introuvable : ${e.message}`); });
+  proc.on('error', (e) => { clearTimeout(timer); clearInterval(poll); if (current?.t === t) finish(t, false, `claude introuvable : ${e.message}`); });
   proc.on('close', (code) => {
-    clearTimeout(timer);
+    clearTimeout(timer); clearInterval(poll);
+    readTodoFile(t);
     if (current?.t !== t) return;
     let r = st.result;
     if (!r) try { r = JSON.parse(out); } catch {} // claudeArgs perso en sortie json simple
@@ -219,7 +267,7 @@ function enqueue(m) {
   const id = randomBytes(4).toString('hex');
   const shot = `.devshots/${new Date().toISOString().replace(/[:.]/g, '-')}-${id}.${ext}`;
   writeFileSync(join(REPO, shot), Buffer.from(m.image.split(',')[1], 'base64'));
-  tasks.push({ id, from: m.from, prompt: m.prompt, shot, state: 'pending', at: Date.now(), fresh: !!m.fresh });
+  tasks.push({ id, todoFile: `.devshots/todo-${id}.json`, from: m.from, prompt: m.prompt, shot, state: 'pending', at: Date.now(), fresh: !!m.fresh });
   const pos = tasks.filter((t) => t.state === 'pending').length - (current ? 0 : 1);
   reply(m.reqId, true, pos > 0 ? `Ajouté à la file (${pos} avant) · F10 pour voir` : 'Claude démarre · F10 pour voir');
   changed();
@@ -271,6 +319,7 @@ function connect() {
     let m; try { m = JSON.parse(raw.toString()); } catch { return; }
     if (m.t === 'prompt') { console.log(`→ prompt de ${m.from} : ${short(m.prompt)}`); enqueue(m); }
     else if (m.t === 'taskOp') applyOp(m);
+    else if (m.t === 'todoOp') todoOp(m);
     else if (m.t === 'board') writeBoard(m.bridges);
   });
   ws.on('close', (code, reason) => {

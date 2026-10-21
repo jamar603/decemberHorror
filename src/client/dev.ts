@@ -204,6 +204,15 @@ export class Dev {
     const p = document.createElement('aside');
     p.id = 'dev-tasks';
     p.addEventListener('click', (e) => this.panelClick(e));
+    p.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const f = e.target as HTMLFormElement;
+      const inp = f.querySelector('input')!;
+      const text = inp.value.trim();
+      if (!text) return;
+      this.net.send({ t: 'devTodo', bridge: f.dataset.bridge!, task: f.dataset.task!, op: 'add', text });
+      inp.value = '';
+    });
     p.addEventListener('keydown', (e) => { if (e.code !== 'F10') e.stopPropagation(); if (e.key === 'Escape') this.togglePanel(); });
     document.body.append(p);
     this.panel = p;
@@ -216,6 +225,8 @@ export class Dev {
   private render() {
     const p = this.panel!;
     const scroll = p.querySelector('.list')?.scrollTop ?? 0;
+    const ae = document.activeElement as HTMLInputElement | null;
+    const typing = ae && p.contains(ae) && ae.closest('.todo-add') ? { task: (ae.closest('.todo-add') as HTMLElement).dataset.task, value: ae.value } : null;
     const row = (b: DevBridge, t: DevTask) => {
       const meta = t.state === 'running' ? `depuis ${ago(t.started ?? t.at)}` : t.state === 'pending' ? `en attente · ${ago(t.at)}` : `il y a ${ago(t.ended ?? t.at)}`;
       const icon = t.state === 'running' ? '<i class="spin"></i>' : t.state === 'pending' ? '<span class="ic wait">…</span>'
@@ -224,6 +235,14 @@ export class Dev {
       const isOpen = this.open.has(t.id);
       const phases = t.state === 'running' ? `<div class="phases">${PHASES.map(([k, l]) => `<span class="${t.phase === k ? 'on' : PHASES.findIndex((x) => x[0] === t.phase) > PHASES.findIndex((x) => x[0] === k) ? 'past' : ''}">${l}</span>`).join('')}</div>` : '';
       const act = t.state === 'running' && t.activity ? `<div class="act">${esc(t.activity)}</div>` : '';
+      const todos = t.todos ?? [];
+      const live = t.state === 'pending' || t.state === 'running';
+      const mine = this.owned.has(b.owner ?? '');
+      const doneN = todos.filter((x) => x.status === 'done').length;
+      const plan = todos.length || (live && mine) ? `<div class="plan">
+        ${todos.length ? `<div class="pbar"><i style="width:${Math.round((doneN / todos.length) * 100)}%"></i></div>` : ''}
+        <ul>${todos.map((x) => `<li class="td ${x.status}"><span class="ck">${x.status === 'done' ? '✓' : x.status === 'doing' ? '▶' : '○'}</span><span class="tx">${esc(x.text)}</span>${x.by !== 'claude' ? `<small>${esc(x.by)}</small>` : ''}${live && mine && x.status === 'todo' ? `<button data-todo-del="${esc(x.id)}" data-task="${esc(t.id)}" data-bridge="${esc(b.id)}" title="Retirer l'étape">✕</button>` : ''}</li>`).join('')}</ul>
+        ${live && mine ? `<form class="todo-add" data-task="${esc(t.id)}" data-bridge="${esc(b.id)}"><input maxlength="160" placeholder="Ajouter une étape…" /><button>+</button></form>` : ''}</div>` : '';
       const hasLog = !!(t.steps?.length || t.files?.length || t.commit);
       const detail = isOpen && hasLog ? `<div class="log">
         ${t.commit ? `<div class="commit">Commit : ${esc(t.commit)}</div>` : ''}
@@ -231,7 +250,7 @@ export class Dev {
         ${t.cost ? `<div class="cost">Durée ${dur((t.ended ?? Date.now()) - (t.started ?? t.at))} · ${t.cost} $</div>` : ''}
         <ol>${(t.steps ?? []).map((s) => `<li class="${s.kind}"><time>${new Date(s.at).toLocaleTimeString('fr-FR')}</time> ${esc(s.text)}</li>`).join('')}</ol></div>` : '';
       return `<li class="task ${t.state}${hasLog ? ' has-log' : ''}" data-id="${esc(t.id)}">${icon}<div class="body"><div class="p" title="${esc(t.prompt)}">${esc(t.prompt)}</div>
-        <div class="meta">${meta}${t.msg ? ` · <em>${esc(t.msg)}</em>` : ''}${hasLog ? ` · <span class="toggle">${isOpen ? '▾ journal' : '▸ journal'}</span>` : ''}</div>${phases}${act}${detail}</div>${del}</li>`;
+        <div class="meta">${meta}${t.msg ? ` · <em>${esc(t.msg)}</em>` : ''}${todos.length ? ` · ${doneN}/${todos.length} étapes` : ''}${hasLog ? ` · <span class="toggle">${isOpen ? '▾ journal' : '▸ journal'}</span>` : ''}</div>${phases}${act}${plan}${detail}</div>${del}</li>`;
     };
     const order = { running: 0, pending: 1, done: 2, failed: 2 };
     const blocks = this.bridges.map((b) => {
@@ -245,18 +264,24 @@ export class Dev {
     p.innerHTML = `<header><b>Tâches Claude (tous les devs)</b><button class="x" title="Fermer (F10)">✕</button></header>
       <div class="list">${blocks || '<p class="empty">Aucun bridge connecté — lance <code>npm run bridge</code> sur ta machine.</p>'}</div>`;
     p.querySelector('.list')!.scrollTop = scroll;
+    if (typing) {
+      const inp = p.querySelector<HTMLInputElement>(`.todo-add[data-task="${CSS.escape(typing.task ?? '')}"] input`);
+      if (inp) { inp.value = typing.value; inp.focus(); }
+    }
   }
 
   private panelClick(e: MouseEvent) {
     const el = e.target as HTMLElement;
     if (el.closest('.x')) return this.togglePanel();
+    const td = el.closest<HTMLElement>('[data-todo-del]');
+    if (td) return this.net.send({ t: 'devTodo', bridge: td.dataset.bridge!, task: td.dataset.task!, op: 'remove', id: td.dataset.todoDel });
     const reset = el.closest<HTMLElement>('.reset');
     if (reset) return this.op(reset.dataset.bridge!, 'reset');
     const clear = el.closest<HTMLElement>('.clear');
     if (clear) return this.op(clear.dataset.bridge!, 'clear');
     const del = el.closest<HTMLElement>('[data-del]');
     if (del) return this.op(del.dataset.bridge!, 'delete', del.dataset.del);
-    if (el.closest('.log')) return; // sélection de texte dans le journal : ne pas replier
+    if (el.closest('.log, .plan')) return; // sélection de texte dans le journal : ne pas replier
     const task = el.closest<HTMLElement>('.task.has-log');
     if (task) { const id = task.dataset.id!; if (!this.open.delete(id)) this.open.add(id); this.render(); }
   }
